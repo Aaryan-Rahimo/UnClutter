@@ -6,6 +6,8 @@ function MainLayout({
   searchQuery = '',
   onSearchChange,
   onRunSort,
+  user = null,
+  onLogout,
 }) {
   return (
     <div className="main-layout">
@@ -13,6 +15,8 @@ function MainLayout({
         searchQuery={searchQuery}
         onSearchChange={onSearchChange}
         onRunSort={onRunSort}
+        user={user}
+        onLogout={onLogout}
       />
       <main className="main-layout__content">{children}</main>
     </div>

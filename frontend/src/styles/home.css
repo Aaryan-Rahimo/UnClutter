@@ -143,6 +143,34 @@
   flex-shrink: 0;
 }
 
+.top-bar__user-email {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: var(--gmail-text-secondary);
+  margin-right: 0.5rem;
+}
+
+.top-bar__logout {
+  padding: 0 0.75rem;
+  height: 36px;
+  line-height: 36px;
+  border: none;
+  border-radius: 24px;
+  background: transparent;
+  color: var(--gmail-text-secondary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  margin-right: 0.5rem;
+}
+
+.top-bar__logout:hover {
+  background: var(--gmail-hover);
+  color: var(--gmail-text);
+}
+
 .top-bar__run-sort {
   padding: 0 1.5rem;
   height: 36px;
@@ -333,6 +361,12 @@
 /* Card grid – keep sorting cards, Gmail-style panels */
 .card-grid-wrap {
   padding-top: 0.25rem;
+}
+
+.gmail-loading {
+  margin: 1rem 0;
+  font-size: 0.875rem;
+  color: var(--gmail-text-secondary);
 }
 
 .card-grid__results-heading {

@@ -1,4 +1,4 @@
-function TopBar({ searchQuery = '', onSearchChange, onRunSort }) {
+function TopBar({ searchQuery = '', onSearchChange, onRunSort, user, onLogout }) {
   return (
     <header className="top-bar">
       <button type="button" className="top-bar__menu" aria-label="Menu">
@@ -20,6 +20,14 @@ function TopBar({ searchQuery = '', onSearchChange, onRunSort }) {
         <p className="top-bar__hint">from:, subject:, label:</p>
       </div>
       <div className="top-bar__right">
+        {user && (
+          <>
+            <span className="top-bar__user-email" title={user}>{user}</span>
+            <button type="button" className="top-bar__logout" onClick={onLogout}>
+              Sign out
+            </button>
+          </>
+        )}
         <button type="button" className="top-bar__run-sort" onClick={onRunSort}>
           Run Sort
         </button>
