@@ -683,6 +683,7 @@ function Home() {
             onClose={() => setChatOpen(false)}
             selectedEmail={selectedEmail}
             emails={emails}
+            userGroups={userGroups}
             onGroupsChange={() => fetchGroups().then(setUserGroups)}
             onToast={addToast}
             onSelectEmail={handleEmailClick}

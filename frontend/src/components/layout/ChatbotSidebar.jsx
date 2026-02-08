@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { API_BASE, getAuthHeaders } from '../../utils/auth'
-import { createGroupFromIntent } from '../../utils/groupsApi'
+import { createGroupFromIntent, deleteGroup } from '../../utils/groupsApi'
 
 const INITIAL_MESSAGES = [
   {
@@ -50,6 +50,26 @@ function isGroupCreationIntent(text) {
   // "sort my … emails"
   if (/^sort\s+(my\s+)?.+\s+emails?/i.test(lower)) return true
   return false
+}
+
+function isGroupDeleteIntent(text) {
+  const lower = text.toLowerCase().trim()
+  if (/^(delete|remove|archive)\s+(a\s+)?(email\s+)?group/i.test(lower)) return true
+  if (/^delete\s+group\s+/i.test(lower)) return true
+  if (/^remove\s+group\s+/i.test(lower)) return true
+  return false
+}
+
+function extractGroupNameForDelete(text) {
+  let result = text.trim()
+  const patterns = [
+    /^(?:delete|remove|archive)\s+(?:a\s+)?(?:email\s+)?group\s+/i,
+    /^(?:delete|remove)\s+group\s+/i,
+  ]
+  for (const p of patterns) {
+    result = result.replace(p, '')
+  }
+  return result.trim().replace(/^"|"$/g, '') || ''
 }
 
 /**
@@ -114,7 +134,7 @@ function renderMessageWithEmailLinks(text, emails, onSelectEmail) {
   })
 }
 
-function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], onGroupsChange, onToast, onSelectEmail }) {
+function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], userGroups = [], onGroupsChange, onToast, onSelectEmail }) {
   const [messages, setMessages] = useState(INITIAL_MESSAGES)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -175,6 +195,35 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
       setError(null)
       setPendingRetry(null)
       setRetryCountdown(0)
+
+      // ── Group deletion intent detection ──
+      if (isGroupDeleteIntent(trimmed)) {
+        setMessages((prev) => [...prev, userMsg])
+        setLoading(true)
+        try {
+          const rawName = extractGroupNameForDelete(trimmed)
+          const target = userGroups.find((g) => g.name?.toLowerCase() === rawName.toLowerCase())
+          if (!rawName || !target) {
+            const msg = rawName
+              ? `I couldn't find a group named "${rawName}". Try the exact group name from the sidebar.`
+              : 'Tell me the exact group name to delete (e.g., "Delete group University").'
+            setMessages((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', text: msg }])
+            return
+          }
+          await deleteGroup(target.id)
+          onGroupsChange?.()
+          const reply = `Deleted the group "${target.name}".`
+          setMessages((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', text: reply }])
+          onToast?.({ type: 'success', message: `Group "${target.name}" deleted` })
+        } catch (err) {
+          const errMsg = err.message || 'Failed to delete group'
+          setError(errMsg)
+          onToast?.({ type: 'error', message: errMsg })
+        } finally {
+          setLoading(false)
+        }
+        return
+      }
 
       // ── Group creation intent detection (broad matching) ──
       if (isGroupCreationIntent(trimmed)) {
