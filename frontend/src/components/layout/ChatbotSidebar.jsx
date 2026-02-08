@@ -138,7 +138,7 @@ function renderMessageWithEmailLinks(text, emails, onSelectEmail) {
   })
 }
 
-function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], userGroups = [], onGroupsChange, onToast, onSelectEmail }) {
+function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], userGroups = [], onGroupsChange, onGroupDeleted, onToast, onSelectEmail }) {
   const [messages, setMessages] = useState(INITIAL_MESSAGES)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -215,6 +215,7 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], us
             return
           }
           await deleteGroup(target.id)
+          onGroupDeleted?.(target.id)
           onGroupsChange?.()
           const reply = `Deleted the group "${target.name}".`
           setMessages((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', text: reply }])

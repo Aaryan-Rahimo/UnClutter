@@ -685,6 +685,9 @@ function Home() {
             emails={emails}
             userGroups={userGroups}
             onGroupsChange={() => fetchGroups().then(setUserGroups)}
+            onGroupDeleted={(groupId) => {
+              setUserGroups((prev) => prev.filter((g) => g.id !== groupId))
+            }}
             onToast={addToast}
             onSelectEmail={handleEmailClick}
           />
