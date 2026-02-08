@@ -3,9 +3,12 @@ import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Home from './pages/Home'
 
+// For GitHub Pages: set VITE_BASE_PATH in build env (e.g. /UnClutter/) so routes work
+const basename = import.meta.env.VITE_BASE_PATH || ''
+
 function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/landing" element={<Navigate to="/" replace />} />

@@ -26,7 +26,10 @@ CORS(app, supports_credentials=True, origins=[os.environ.get("FRONTEND_URL", "ht
 CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5174")
-REDIRECT_URI = "http://localhost:5001/api/auth/google/callback"
+REDIRECT_URI = os.environ.get(
+    "REDIRECT_URI",
+    "http://localhost:5001/api/auth/google/callback",
+)
 
 SCOPES = [
     "openid",
@@ -174,7 +177,11 @@ def auth_callback():
     except Exception as e:
         print("Userinfo failed (non-fatal):", e)
     token_id = save_tokens(creds, email=email)
-    return redirect(f"{FRONTEND_URL}/home?token={token_id}")
+    target = f"{FRONTEND_URL}/home?token={token_id}"
+    # Redirect; also send HTML fallback in case redirect is lost
+    resp = redirect(target)
+    resp.headers["Refresh"] = f"0;url={target}"
+    return resp
 
 
 @app.route("/api/auth/me")
@@ -397,6 +404,12 @@ def reply_to_email(msg_id):
         return jsonify({"id": sent["id"], "threadId": sent.get("threadId")}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/health")
+def health():
+    """For hosting health checks."""
+    return jsonify({"status": "ok"}), 200
 
 
 if __name__ == "__main__":
