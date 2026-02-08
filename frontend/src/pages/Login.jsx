@@ -28,11 +28,35 @@ function LoginPage() {
           <Link to="/" className="login-logo">
             UnClutter
           </Link>
-          <h1 className="login-title">Welcome back</h1>
+          <h1 className="login-title">Log in to your account</h1>
           <GoogleButton className="login-google-btn" />
-          <p className="login-footer">
-            We use Google only to read your email and show it in category cards. You can sign out anytime.
-          </p>
+
+          <div className="login-divider">
+            <span>or</span>
+          </div>
+
+          <div className="login-field">
+            <label htmlFor="email">Email</label>
+            <input id="email" type="email" placeholder="you@school.edu" autoComplete="off" />
+          </div>
+
+          <div className="login-field">
+            <label htmlFor="password">Password</label>
+            <input id="password" type="password" placeholder="••••••••" autoComplete="off" />
+          </div>
+
+          <button type="button" className="login-primary-btn">
+            Continue
+          </button>
+
+          <div className="login-footer">
+            <p>
+              Don&apos;t have an account? <a href="#signup">Sign up</a>
+            </p>
+            <p>
+              <a href="#help">Having trouble logging in?</a>
+            </p>
+          </div>
         </div>
       </div>
     </div>
