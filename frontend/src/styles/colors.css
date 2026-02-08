@@ -1,0 +1,27 @@
+/* Base Colors — primary brand hues for buttons, links, and key UI accents */
+:root {
+  /* Base Colors */
+  --color-navy-deep: #03256C; /* Deep backgrounds, strong headers */
+  --color-blue-royal: #2541B2; /* Primary buttons, active links */
+  --color-blue-sky: #1768AC; /* Secondary buttons, hover states */
+  --color-cyan-accent: #06BEE1; /* Accent highlights, icons, badges */
+  --color-white: #FFFFFF; /* Clean backgrounds, light surfaces */
+
+  /* Extended Palette — softer tints for cards, badges, and subtle UI */
+  --color-blue-primary-soft: #4D6CFF; /* Soft primary accents, hover fills */
+  --color-blue-primary-light: #AFC2FF; /* Pills, tags, subtle highlights */
+  --color-blue-secondary-soft: #4FA3E3; /* Secondary accents, info states */
+  --color-blue-secondary-light: #CFEAFF; /* Light cards, soft panels */
+  --color-cyan-soft: #5EDAF2; /* Soft accents, hover rings */
+  --color-cyan-light: #DFF8FD; /* Background washes, gentle highlights */
+
+  /* Backgrounds & UI — layout surfaces and dividers */
+  --color-bg-light: #F5F8FF; /* Page backgrounds */
+  --color-bg-card: #EEF3FF; /* Card and panel backgrounds */
+  --color-border: #D6E0FF; /* Borders, dividers, outlines */
+
+  /* Text — readable foregrounds */
+  --color-text-primary: #0B1B3A; /* Main body text, headings */
+  --color-text-muted: #5F6F9A; /* Secondary text, captions */
+  --color-text-inverted: #FFFFFF; /* Text on dark backgrounds */
+}

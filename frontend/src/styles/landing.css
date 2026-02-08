@@ -1,0 +1,450 @@
+/* ============================================
+   UnClutter Landing Page – Blue Palette Styles
+   Uses variables from colors.css only.
+   ============================================ */
+
+/* --------------------------------------------
+   LandingPage (top-level wrapper)
+   -------------------------------------------- */
+.landing-page {
+  min-height: 100vh;
+  background-color: var(--color-bg-light);
+  color: var(--color-text-primary);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Background mesh (kept subtle behind content) */
+.landing-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.landing-bg__mesh {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 100vw;
+  min-height: 100vh;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.landing-bg canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.landing-bg__wash {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--color-bg-light);
+  opacity: 0.65;
+}
+
+.landing-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* --------------------------------------------
+   Navbar
+   -------------------------------------------- */
+.navbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: 1rem 2rem;
+  max-width: 100%;
+  margin: 0 auto;
+  background-color: color-mix(in srgb, var(--color-white) 50%, transparent);
+  backdrop-filter: blur(12px);
+  border-radius: 0 0 16px 16px;
+}
+
+.navbar__logo {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.navbar__logo:hover {
+  color: var(--color-blue-royal);
+}
+
+.navbar__links {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1.5rem;
+  list-style: none;
+  margin: 0 auto 0 2rem;
+  padding: 0;
+}
+
+.navbar__link {
+  color: var(--color-text-muted);
+  text-decoration: none;
+  font-size: 0.9375rem;
+}
+
+.navbar__link:hover {
+  color: var(--color-blue-royal);
+}
+
+.navbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Text button (e.g. Sign in) */
+.btn-text {
+  background: none;
+  border: none;
+  color: var(--color-blue-royal);
+  cursor: pointer;
+  font-size: 0.9375rem;
+  font-weight: 400;
+  padding: 0.5rem 0.75rem;
+  text-decoration: none;
+}
+
+.btn-text:hover {
+  color: var(--color-blue-sky);
+}
+
+/* Primary CTA button */
+.btn-primary {
+  background-color: var(--color-blue-royal);
+  color: var(--color-text-inverted);
+  border: none;
+  padding: 0.5rem 1rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.btn-primary:hover {
+  background-color: var(--color-blue-sky);
+}
+
+/* Secondary button */
+.btn-secondary {
+  background-color: var(--color-white);
+  color: var(--color-blue-royal);
+  border: 2px solid var(--color-blue-royal);
+  padding: 0.5rem 1rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.btn-secondary:hover {
+  border-color: var(--color-blue-sky);
+  color: var(--color-blue-sky);
+}
+
+/* --------------------------------------------
+   HeroSection
+   -------------------------------------------- */
+.hero {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+  min-height: 110vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.75rem;
+  position: relative;
+}
+
+.hero::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100vw;
+  bottom: 0;
+  height: 120px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--color-bg-light) 0%, transparent),
+    var(--color-bg-light)
+  );
+  pointer-events: none;
+}
+
+.hero__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  background-color: var(--color-blue-primary-light);
+  color: var(--color-blue-royal);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  margin-bottom: 1.25rem;
+  white-space: nowrap;
+}
+
+.hero__headline {
+  font-size: 4rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0 0 1rem;
+  color: var(--color-text-primary);
+}
+
+.hero__headline-accent {
+  color: var(--color-blue-primary-soft);
+}
+
+.hero__subheading {
+  font-size: calc(1.125rem);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  max-width: 560px;
+  margin: 0 auto 2rem;
+}
+
+.hero__ctas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------------
+   FeaturesSection
+   -------------------------------------------- */
+.features {
+  padding: 2rem 2rem 5rem;
+  background-color: var(--color-bg-light);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.features::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100vw;
+  bottom: 0;
+  height: 150px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--color-slate-deep)
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+.features__content {
+  max-width: 1200px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.features__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.features__subtitle {
+  margin: 0 auto 2.5rem;
+  max-width: 640px;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+
+.features__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1.5rem;
+  text-align: left;
+}
+
+.feature-card {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 8px 20px var(--color-blue-primary-light);
+}
+
+.feature-card__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--color-cyan-light);
+  border: 1px solid var(--color-blue-secondary-light);
+  margin-bottom: 0.75rem;
+}
+
+.feature-card__title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.feature-card__text {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 900px) {
+  .features__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .features {
+    padding: 2rem 1.5rem 4rem;
+  }
+
+  .features__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --------------------------------------------
+   ComparisonSection – UnClutter vs Gmail
+   -------------------------------------------- */
+.comparison {
+  padding: 5rem 2rem;
+  background-color: var(--color-white);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+}
+
+.comparison__content {
+  max-width: 800px;
+  margin: 0 auto;
+  text-align: center;
+  width: 100%;
+}
+
+.comparison__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.comparison__subtitle {
+  margin: 0 auto 2.5rem;
+  max-width: 520px;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+
+.comparison__table-wrap {
+  overflow-x: auto;
+}
+
+.comparison__table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.comparison__th {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  border-bottom: 2px solid var(--color-border);
+  text-align: center;
+}
+
+.comparison__th--feature {
+  text-align: left;
+}
+
+.comparison__th--brand {
+  color: var(--color-blue-royal);
+}
+
+.comparison__row:nth-child(even) {
+  background-color: var(--color-bg-light);
+}
+
+.comparison__td {
+  padding: 0.75rem 1rem;
+  font-size: 0.9375rem;
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-border);
+  text-align: center;
+}
+
+.comparison__td--feature {
+  text-align: left;
+  color: var(--color-text-muted);
+}
+
+.comparison__check {
+  color: var(--color-blue-royal);
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.comparison__cross {
+  color: var(--color-text-muted);
+  font-size: 1.125rem;
+  font-weight: 400;
+  opacity: 0.5;
+}
+
+@media (max-width: 560px) {
+  .comparison {
+    padding: 3rem 1rem;
+  }
+
+  .comparison__th,
+  .comparison__td {
+    padding: 0.5rem 0.5rem;
+    font-size: 0.8125rem;
+  }
+}

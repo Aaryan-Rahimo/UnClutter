@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import GoogleButton from '../components/auth/GoogleButton'
 
-function Login() {
+function LoginPage() {
   return (
     <div className="login-page">
       <div className="login-page__bg" aria-hidden="true" />
@@ -22,4 +22,4 @@ function Login() {
   )
 }
 
-export default Login
+export default LoginPage
