@@ -7,10 +7,17 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Home />} />
+        {/* Default landing page */}
+        <Route path="/" element={<Landing />} />
+
+        {/* Login route */}
+        <Route path="/login" element={<Login />} />
+
+        {/* Home / inbox */}
         <Route path="/home" element={<Home />} />
-        <Route path="/login" element={<Navigate to="/" replace />} />
-        <Route path="/landing" element={<Landing />} />
+
+        {/* Redirect unknown routes to landing */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   )

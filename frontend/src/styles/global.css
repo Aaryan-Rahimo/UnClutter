@@ -1,3 +1,5 @@
+@import './colors.css';
+
 *,
 *::before,
 *::after {
@@ -6,9 +8,9 @@
 
 body {
   margin: 0;
-  font-family: 'Roboto', system-ui, -apple-system, sans-serif;
-  color: #202124;
-  background: #f6f8fc;
+  font-family: 'Creato-Display', system-ui, -apple-system, sans-serif;
+  color: var(--color-text-primary);
+  background: var(--color-bg-light);
 }
 
 #root {
@@ -41,4 +43,20 @@ body {
 
 .login-page h1 {
   margin-bottom: 1.5rem;
+}
+
+@font-face {
+  font-family: 'Creato-Display';
+  src: url('../assets/fonts/CreatoDisplay-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Creato-Display';
+  src: url('../assets/fonts/CreatoDisplay-Medium.otf') format('opentype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
 }
