@@ -3,7 +3,9 @@ Flask backend: Google OAuth + Gmail API.
 Run: flask --app app run -p 5001
 """
 import base64
+import json
 import os
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from email import policy
@@ -43,13 +45,33 @@ SCOPES = [
 # Use Redis/DB in production. In dev, tokens are lost on server restart.
 TOKEN_STORE = {}
 
+# Debug logging (runtime evidence only; no secrets)
+DEBUG_LOG_PATH = "/Users/osmanraza/Desktop/UnClutter/UnClutter/.cursor/debug.log"
+
+
+def _debug_log(hypothesis_id, location, message, data):
+    payload = {
+        "id": f"log_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+        "timestamp": int(time.time() * 1000),
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+    }
+    try:
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
 
 def get_client_config():
     return {
         "web": {
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [REDIRECT_URI],
         }
@@ -144,30 +166,119 @@ def save_tokens(credentials, email=None):
 @app.route("/api/auth/login")
 def login():
     """Redirect to Google OAuth."""
+    # region agent log
+    _debug_log(
+        "H2",
+        "backend/app.py:login:entry",
+        "auth_login_entry",
+        {
+            "redirectUri": REDIRECT_URI,
+            "frontendUrl": FRONTEND_URL,
+            "hasClientId": bool(CLIENT_ID),
+            "hasClientSecret": bool(CLIENT_SECRET),
+            "requestHost": request.host,
+            "requestScheme": request.scheme,
+            "requestOrigin": request.headers.get("Origin", ""),
+            "requestReferer": request.headers.get("Referer", ""),
+        },
+    )
+    # endregion
     flow = get_flow()
     authorization_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
+        response_type="code",
         prompt="consent",
     )
+    # region agent log
+    _debug_log(
+        "H2",
+        "backend/app.py:login:auth_url",
+        "auth_login_redirect_ready",
+        {
+            "redirectUri": REDIRECT_URI,
+            "accessType": "offline",
+            "prompt": "consent",
+        },
+    )
+    # endregion
     return redirect(authorization_url)
 
 
 @app.route("/api/auth/google/callback")
 def auth_callback():
     """Exchange code for tokens and redirect to frontend."""
+    # region agent log
+    _debug_log(
+        "H3",
+        "backend/app.py:auth_callback:entry",
+        "auth_callback_entry",
+        {
+            "argsKeys": sorted(list(request.args.keys())),
+            "hasError": "error" in request.args,
+            "hasCode": bool(request.args.get("code")),
+        },
+    )
+    # endregion
     if "error" in request.args:
+        # region agent log
+        _debug_log(
+            "H3",
+            "backend/app.py:auth_callback:error",
+            "auth_callback_error",
+            {"error": request.args.get("error", "")},
+        )
+        # endregion
         return redirect(f"{FRONTEND_URL}/login?error=access_denied")
     code = request.args.get("code")
     if not code:
+        # region agent log
+        _debug_log(
+            "H3",
+            "backend/app.py:auth_callback:no_code",
+            "auth_callback_no_code",
+            {},
+        )
+        # endregion
         return redirect(f"{FRONTEND_URL}/login?error=no_code")
     try:
+        # region agent log
+        _debug_log(
+            "H3",
+            "backend/app.py:auth_callback:fetch_token_start",
+            "auth_callback_fetch_token_start",
+            {
+                "redirectUri": REDIRECT_URI,
+                "hasClientId": bool(CLIENT_ID),
+                "hasClientSecret": bool(CLIENT_SECRET),
+            },
+        )
+        # endregion
         flow = get_flow()
         flow.fetch_token(code=code)
         creds = flow.credentials
     except Exception as e:
         print("OAuth token exchange failed:", e)
+        # region agent log
+        _debug_log(
+            "H3",
+            "backend/app.py:auth_callback:fetch_token_failed",
+            "auth_callback_fetch_token_failed",
+            {"errorType": type(e).__name__},
+        )
+        # endregion
         return redirect(f"{FRONTEND_URL}/login?error=token_exchange_failed")
+    # region agent log
+    _debug_log(
+        "H3",
+        "backend/app.py:auth_callback:fetch_token_success",
+        "auth_callback_fetch_token_success",
+        {
+            "hasRefreshToken": bool(getattr(creds, "refresh_token", None)),
+            "hasIdToken": bool(getattr(creds, "id_token", None)),
+        },
+    )
+    # endregion
     email = ""
     try:
         from googleapiclient.discovery import build as build_api

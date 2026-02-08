@@ -2,6 +2,9 @@ import { API_BASE } from '../../utils/auth'
 
 function GoogleButton() {
   const handleClick = () => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/66c379fb-3e46-49cd-93f0-58e1ee110e33',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix',hypothesisId:'H1',location:'frontend/src/components/auth/GoogleButton.jsx:handleClick',message:'google_login_click',data:{apiBase:API_BASE,targetUrl:`${API_BASE}/api/auth/login`,origin:window.location.origin,protocol:window.location.protocol,href:window.location.href},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     window.location.href = `${API_BASE}/api/auth/login`
   }
 
