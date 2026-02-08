@@ -21,14 +21,7 @@ import {
 import { fetchGroups, updateGroup, deleteGroup } from '../utils/groupsApi'
 import '../styles/home.css'
 
-const CATEGORY_TABS = [
-  { id: 'Primary', label: 'Primary', color: '#1a73e8' },
-  { id: 'School', label: 'School', color: '#4285f4' },
-  { id: 'Finance', label: 'Finance', color: '#34a853' },
-  { id: 'Work', label: 'Work', color: '#f9ab00' },
-  { id: 'Personal', label: 'Personal', color: '#ea4335' },
-  { id: 'Other', label: 'Updates', color: '#5f6368' },
-]
+import { matchEmailToGroup } from '../utils/groupsApi'
 
 function parseEmailDate(dateStr) {
   if (!dateStr) return null
@@ -74,13 +67,27 @@ function formatDate(isoStr) {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+/* ── Resizable panel defaults ── */
+const DEFAULT_SIDEBAR_W = 220
+const DEFAULT_CHAT_W = 320
+const DEFAULT_DETAIL_W = 400
+const MIN_SIDEBAR_W = 180
+const MAX_SIDEBAR_W = 420
+const MIN_CHAT_W = 280
+const MAX_CHAT_W = 600
+const MIN_DETAIL_W = 280
+const MAX_DETAIL_W = 600
+const MIN_CENTER_W = 300
+
+function clamp(val, min, max) { return Math.max(min, Math.min(max, val)) }
+
 function Home() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedEmailId, setSelectedEmailId] = useState(null)
   const [selectedEmail, setSelectedEmail] = useState(null)
   const [sortRange, setSortRange] = useState('All time')
   const [viewMode, setViewMode] = useState('tabs')
-  const [activeTab, setActiveTab] = useState('Primary')
+  const [activeTab, setActiveTab] = useState('__all__')
   const [syncing, setSyncing] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -101,6 +108,21 @@ function Home() {
   const [editingGroup, setEditingGroup] = useState(null)
   const [deletingGroup, setDeletingGroup] = useState(null)
 
+  // Resizable panels
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('uc_sidebar_w')
+    return saved ? clamp(parseInt(saved, 10), MIN_SIDEBAR_W, MAX_SIDEBAR_W) : DEFAULT_SIDEBAR_W
+  })
+  const [chatWidth, setChatWidth] = useState(() => {
+    const saved = localStorage.getItem('uc_chat_w')
+    return saved ? clamp(parseInt(saved, 10), MIN_CHAT_W, MAX_CHAT_W) : DEFAULT_CHAT_W
+  })
+  const [detailWidth, setDetailWidth] = useState(() => {
+    const saved = localStorage.getItem('uc_detail_w')
+    return saved ? clamp(parseInt(saved, 10), MIN_DETAIL_W, MAX_DETAIL_W) : DEFAULT_DETAIL_W
+  })
+  const resizingRef = useRef(null)  // { panel: 'sidebar'|'chat'|'detail', startX, startW }
+
   const sessionId = getSessionId()
 
   const addToast = useCallback((toast) => {
@@ -110,6 +132,72 @@ function Home() {
 
   const dismissToast = useCallback((id) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
+  }, [])
+
+  // ── Resize panel drag logic ──
+  const startResize = useCallback((e, panel) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = panel === 'sidebar' ? sidebarWidth : panel === 'detail' ? detailWidth : chatWidth
+    resizingRef.current = { panel, startX, startW }
+    document.body.classList.add('resizing-panels')
+
+    const onMove = (ev) => {
+      if (!resizingRef.current) return
+      const delta = ev.clientX - resizingRef.current.startX
+      const totalW = window.innerWidth
+
+      if (resizingRef.current.panel === 'sidebar') {
+        const maxSW = Math.min(MAX_SIDEBAR_W, totalW - (chatOpen ? chatWidth : 0) - MIN_CENTER_W - 10)
+        const newW = clamp(resizingRef.current.startW + delta, MIN_SIDEBAR_W, maxSW)
+        setSidebarWidth(newW)
+      } else if (resizingRef.current.panel === 'detail') {
+        // Detail: drag right makes it wider, so negate delta (handle is on the left edge of detail)
+        const maxDW = Math.min(MAX_DETAIL_W, totalW - sidebarWidth - (chatOpen ? chatWidth : 0) - MIN_CENTER_W - 10)
+        const newW = clamp(resizingRef.current.startW - delta, MIN_DETAIL_W, maxDW)
+        setDetailWidth(newW)
+      } else {
+        // Chat: drag left makes it wider, so negate delta
+        const maxCW = Math.min(MAX_CHAT_W, totalW - sidebarWidth - MIN_CENTER_W - 10)
+        const newW = clamp(resizingRef.current.startW - delta, MIN_CHAT_W, maxCW)
+        setChatWidth(newW)
+      }
+    }
+
+    const onUp = () => {
+      document.body.classList.remove('resizing-panels')
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      // Save to localStorage
+      if (resizingRef.current?.panel === 'sidebar') {
+        localStorage.setItem('uc_sidebar_w', String(sidebarWidth))
+      } else if (resizingRef.current?.panel === 'detail') {
+        localStorage.setItem('uc_detail_w', String(detailWidth))
+      } else {
+        localStorage.setItem('uc_chat_w', String(chatWidth))
+      }
+      resizingRef.current = null
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [sidebarWidth, chatWidth, detailWidth, chatOpen])
+
+  // Save widths when they change (debounced by mouse-up, but also sync latest)
+  useEffect(() => {
+    localStorage.setItem('uc_sidebar_w', String(sidebarWidth))
+  }, [sidebarWidth])
+  useEffect(() => {
+    localStorage.setItem('uc_chat_w', String(chatWidth))
+  }, [chatWidth])
+  useEffect(() => {
+    localStorage.setItem('uc_detail_w', String(detailWidth))
+  }, [detailWidth])
+
+  const resetPanelWidth = useCallback((panel) => {
+    if (panel === 'sidebar') setSidebarWidth(DEFAULT_SIDEBAR_W)
+    else if (panel === 'detail') setDetailWidth(DEFAULT_DETAIL_W)
+    else setChatWidth(DEFAULT_CHAT_W)
   }, [])
 
   const categorizeEmails = useCallback(async (emailList) => {
@@ -149,8 +237,28 @@ function Home() {
   useEffect(() => {
     if (!sessionId) return
     let cancelled = false
+
+    const GROUP_PALETTE = [
+      '#4285f4', '#0f9d58', '#f4b400', '#db4437', '#ab47bc',
+      '#ff6d00', '#00897b', '#e8710a', '#185abc', '#c5221f',
+    ]
+
     fetchGroups()
-      .then((groups) => {
+      .then(async (groups) => {
+        if (cancelled) return
+        // One-time fix: reassign colors if 3+ groups all share the same color
+        const blueCount = groups.filter((g) => g.color === '#1a73e8').length
+        if (blueCount >= 3) {
+          let idx = 0
+          for (const g of groups) {
+            if (g.color === '#1a73e8') {
+              const newColor = GROUP_PALETTE[idx % GROUP_PALETTE.length]
+              try { await updateGroup(g.id, { color: newColor }) } catch {}
+              g.color = newColor
+              idx++
+            }
+          }
+        }
         if (!cancelled) setUserGroups(groups)
       })
       .catch(() => {})
@@ -305,37 +413,49 @@ function Home() {
     [filteredEmails, sortRange]
   )
 
-  const tabCounts = useMemo(() => ({
-      Primary: sortedEmails.filter((e) =>
-        ['School', 'Work', 'Personal'].includes(e.ai_category || '') || !e.ai_category
-      ).length,
-      School: sortedEmails.filter((e) => e.ai_category === 'School').length,
-      Finance: sortedEmails.filter((e) => e.ai_category === 'Finance').length,
-      Work: sortedEmails.filter((e) => e.ai_category === 'Work').length,
-      Personal: sortedEmails.filter((e) => e.ai_category === 'Personal').length,
-      Other: sortedEmails.filter((e) => !e.ai_category || e.ai_category === 'Other').length,
-  }), [sortedEmails])
+  // Build dynamic tabs from user groups: "All" + each user group + "Unsorted"
+  const groupTabs = useMemo(() => {
+    const tabs = [{ id: '__all__', label: 'All Mail', color: '#1a73e8' }]
+    for (const g of userGroups) {
+      tabs.push({ id: g.id, label: g.name, color: g.color || '#5f6368' })
+    }
+    if (userGroups.length > 0) {
+      tabs.push({ id: '__unsorted__', label: 'Unsorted', color: '#9aa0a6' })
+    }
+    return tabs
+  }, [userGroups])
+
+  const groupTabCounts = useMemo(() => {
+    const counts = { __all__: sortedEmails.length }
+    let matchedCount = 0
+    for (const g of userGroups) {
+      const c = sortedEmails.filter((e) => matchEmailToGroup(e, g)).length
+      counts[g.id] = c
+      matchedCount += c
+    }
+    counts.__unsorted__ = sortedEmails.length - matchedCount
+    return counts
+  }, [sortedEmails, userGroups])
 
   const displayedEmails = useMemo(() => {
     if (viewMode === 'grouped') return sortedEmails
-    if (activeTab === 'Primary') {
-      return sortedEmails.filter((e) =>
-        ['School', 'Work', 'Personal'].includes(e.ai_category || '') || !e.ai_category
-      )
+    // Tab view: filter by selected group tab
+    if (activeTab === '__all__') return sortedEmails
+    if (activeTab === '__unsorted__') {
+      return sortedEmails.filter((e) => !userGroups.some((g) => matchEmailToGroup(e, g)))
     }
-    if (activeTab === 'Other') {
-      return sortedEmails.filter((e) => !e.ai_category || e.ai_category === 'Other')
-    }
-    return sortedEmails.filter((e) => (e.ai_category || 'Other') === activeTab)
-  }, [sortedEmails, viewMode, activeTab])
+    const group = userGroups.find((g) => g.id === activeTab)
+    if (group) return sortedEmails.filter((e) => matchEmailToGroup(e, group))
+    return sortedEmails
+  }, [sortedEmails, viewMode, activeTab, userGroups])
 
   const categoryTabsWithCounts = useMemo(
     () =>
-      CATEGORY_TABS.map((t) => ({
+      groupTabs.map((t) => ({
         ...t,
-        count: tabCounts[t.id] || 0,
+        count: groupTabCounts[t.id] || 0,
       })),
-    [tabCounts]
+    [groupTabs, groupTabCounts]
   )
 
   // ---------- Keyboard shortcuts ----------
@@ -409,11 +529,20 @@ function Home() {
     : null
 
   // Build CSS class for dashboard
+  const isGroupedView = viewMode === 'grouped'
   const dashClasses = [
     'dashboard dashboard--gmail',
     chatOpen ? 'dashboard--chat-open' : '',
     sidebarCollapsed ? 'dashboard--sidebar-collapsed' : '',
+    isGroupedView ? 'dashboard--grouped' : '',
   ].filter(Boolean).join(' ')
+
+  // CSS custom properties for resizable panels
+  const dashStyle = {
+    '--sidebar-w': sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
+    '--chat-w': `${chatWidth}px`,
+    '--detail-w': `${detailWidth}px`,
+  }
 
   return (
     <MainLayout
@@ -448,7 +577,7 @@ function Home() {
           </button>
         </div>
       )}
-      <div className={dashClasses}>
+      <div className={dashClasses} style={dashStyle}>
         <div className="dashboard__sidebar">
           <InboxSidebar
             emailCount={sortedEmails.length}
@@ -456,6 +585,8 @@ function Home() {
             viewMode={viewMode}
             onViewModeChange={setViewMode}
             userGroups={userGroups}
+            onDeleteGroup={handleDeleteGroup}
+            onEditGroup={handleEditGroup}
           />
         </div>
         <div className="dashboard__list-area">
@@ -517,7 +648,14 @@ function Home() {
             )}
           </div>
         </div>
-        <div className="dashboard__detail">
+        {/* Backdrop for grouped-view detail overlay */}
+        {isGroupedView && (
+          <div
+            className={`dashboard__detail-backdrop ${displayEmail ? 'detail--open' : ''}`}
+            onClick={() => { setSelectedEmailId(null); setSelectedEmail(null) }}
+          />
+        )}
+        <div className={`dashboard__detail ${isGroupedView && displayEmail ? 'detail--open' : ''}`}>
           {detailLoading ? (
             <div className="email-detail-empty">
               <span className="loading-spinner" aria-hidden="true" />
@@ -531,13 +669,13 @@ function Home() {
                 setSelectedEmail(null)
               }}
             />
-          ) : (
+          ) : !isGroupedView ? (
             <div className="email-detail-empty">
               <div className="empty-state__icon" aria-hidden="true">&#128232;</div>
               <p className="email-detail-empty__title">Select an email to read</p>
               <p className="empty-state__hint">Click an email from the list or press J/K to navigate</p>
             </div>
-          )}
+          ) : null}
         </div>
         <div className={`dashboard__chat ${!chatOpen ? 'is-closed' : ''}`}>
           <ChatbotSidebar
@@ -547,8 +685,48 @@ function Home() {
             emails={emails}
             onGroupsChange={() => fetchGroups().then(setUserGroups)}
             onToast={addToast}
+            onSelectEmail={handleEmailClick}
           />
         </div>
+
+        {/* Resize handles (absolutely positioned over panel borders) */}
+        {!sidebarCollapsed && (
+          <div
+            className="resize-handle resize-handle--sidebar"
+            style={{ left: `${sidebarWidth - 2}px` }}
+            onMouseDown={(e) => startResize(e, 'sidebar')}
+            onDoubleClick={() => resetPanelWidth('sidebar')}
+            title="Drag to resize sidebar (double-click to reset)"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+          />
+        )}
+        {/* Resize handle between email list and detail panel (non-grouped view only) */}
+        {!isGroupedView && (
+          <div
+            className="resize-handle resize-handle--detail"
+            style={{ right: `${(chatOpen ? chatWidth : 0) + detailWidth - 2}px` }}
+            onMouseDown={(e) => startResize(e, 'detail')}
+            onDoubleClick={() => resetPanelWidth('detail')}
+            title="Drag to resize detail panel (double-click to reset)"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize detail panel"
+          />
+        )}
+        {chatOpen && (
+          <div
+            className="resize-handle resize-handle--chat"
+            style={{ right: `${chatWidth - 2}px` }}
+            onMouseDown={(e) => startResize(e, 'chat')}
+            onDoubleClick={() => resetPanelWidth('chat')}
+            title="Drag to resize chat (double-click to reset)"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize chat panel"
+          />
+        )}
       </div>
 
       {/* Toast notifications */}

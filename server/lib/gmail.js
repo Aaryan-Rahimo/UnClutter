@@ -38,43 +38,31 @@ const BOILERPLATE_PATTERNS = [
   /all\s+rights\s+reserved/i,
   /^\s*https?:\/\/\S+\s*$/,
   /^(facebook|twitter|instagram|linkedin|youtube|tiktok)\s*$/i,
+  /terms\s+(of\s+)?(service|use)/i,
+  /privacy\s+policy/i,
+  /opt[\s-]?out/i,
+  /powered\s+by\s+/i,
+  /sent\s+with\s+/i,
+  /^\s*share\s*$/i,
+  /add\s+us\s+to\s+your\s+address\s+book/i,
+  /trouble\s+viewing/i,
+  /web\s+version/i,
+  /view\s+(in|as)\s+(a\s+)?web/i,
+  /read\s+more\s*$/i,
+  /^\s*learn\s+more\s*$/i,
+  /^\s*click\s+here\s*$/i,
 ];
 
 function isBoilerplateLine(line) {
   const trimmed = line.trim();
   if (!trimmed) return false;
-  if (trimmed.length < 5) return false;
+  if (trimmed.length < 3) return false;
   return BOILERPLATE_PATTERNS.some((p) => p.test(trimmed));
 }
 
-function htmlToPlainText(html) {
-  if (!html) return '';
-
-  let text = html;
-
-  // Remove entire blocks that are never content
-  text = text.replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '');
-  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-  text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-  text = text.replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '');
-
-  // Replace structural elements with newlines
-  text = text.replace(/<br\s*\/?>/gi, '\n');
-  text = text.replace(/<\/p>/gi, '\n\n');
-  text = text.replace(/<\/div>/gi, '\n');
-  text = text.replace(/<\/tr>/gi, '\n');
-  text = text.replace(/<\/h[1-6]>/gi, '\n\n');
-  text = text.replace(/<\/li>/gi, '\n');
-  text = text.replace(/<li[^>]*>/gi, '\u2022 ');
-  text = text.replace(/<\/blockquote>/gi, '\n');
-  text = text.replace(/<blockquote[^>]*>/gi, '> ');
-  text = text.replace(/<hr[^>]*>/gi, '\n---\n');
-
-  // Remove all remaining tags
-  text = text.replace(/<[^>]+>/g, ' ');
-
-  // Decode HTML entities
-  text = text
+/** Decode common HTML entities. */
+function decodeHtmlEntities(text) {
+  return text
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
@@ -91,16 +79,84 @@ function htmlToPlainText(html) {
     .replace(/&copy;/gi, '\u00A9')
     .replace(/&reg;/gi, '\u00AE')
     .replace(/&trade;/gi, '\u2122')
+    .replace(/&bull;/gi, '\u2022')
+    .replace(/&middot;/gi, '\u00B7')
+    .replace(/&ensp;/gi, ' ')
+    .replace(/&emsp;/gi, ' ')
+    .replace(/&thinsp;/gi, ' ')
+    .replace(/&zwnj;/gi, '')
+    .replace(/&zwj;/gi, '')
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
     .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
+}
 
-  // Clean up whitespace per line
+function htmlToPlainText(html) {
+  if (!html) return '';
+
+  let text = html;
+
+  // Remove entire blocks that are never content
+  text = text.replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '');
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+  text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+  text = text.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
+  text = text.replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '');
+  text = text.replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '');
+
+  // Remove hidden elements (display:none, visibility:hidden, font-size:0, etc.)
+  text = text.replace(/<[^>]+style\s*=\s*"[^"]*display\s*:\s*none[^"]*"[^>]*>[\s\S]*?<\/[^>]+>/gi, '');
+  text = text.replace(/<[^>]+style\s*=\s*"[^"]*visibility\s*:\s*hidden[^"]*"[^>]*>[\s\S]*?<\/[^>]+>/gi, '');
+  text = text.replace(/<[^>]+style\s*=\s*"[^"]*font-size\s*:\s*0[^"]*"[^>]*>[\s\S]*?<\/[^>]+>/gi, '');
+
+  // Remove tracking pixels (1x1 images, images with tiny dimensions)
+  text = text.replace(/<img[^>]*(width\s*=\s*["']?1|height\s*=\s*["']?1)[^>]*>/gi, '');
+  text = text.replace(/<img[^>]*style\s*=\s*"[^"]*(?:width|height)\s*:\s*[01]px[^"]*"[^>]*>/gi, '');
+
+  // --- Structural conversion: headings get double newlines for section separation ---
+  text = text.replace(/<h([1-6])[^>]*>/gi, '\n\n');
+  text = text.replace(/<\/h[1-6]>/gi, '\n\n');
+
+  // Paragraphs: double newline after
+  text = text.replace(/<\/p>/gi, '\n\n');
+  text = text.replace(/<p[^>]*>/gi, '');
+
+  // Divs: single newline (they are generic containers)
+  text = text.replace(/<\/div>/gi, '\n');
+  text = text.replace(/<div[^>]*>/gi, '');
+
+  // Table rows → newline after each row
+  text = text.replace(/<\/tr>/gi, '\n');
+  text = text.replace(/<\/td>/gi, '  ');
+  text = text.replace(/<\/th>/gi, '  ');
+
+  // Line breaks
+  text = text.replace(/<br\s*\/?>/gi, '\n');
+
+  // Lists: bullet point for li, double newline for list end
+  text = text.replace(/<li[^>]*>/gi, '\u2022 ');
+  text = text.replace(/<\/li>/gi, '\n');
+  text = text.replace(/<\/[ou]l>/gi, '\n');
+
+  // Blockquotes
+  text = text.replace(/<blockquote[^>]*>/gi, '\n> ');
+  text = text.replace(/<\/blockquote>/gi, '\n');
+
+  // Horizontal rules
+  text = text.replace(/<hr[^>]*>/gi, '\n---\n');
+
+  // Remove all remaining tags
+  text = text.replace(/<[^>]+>/g, ' ');
+
+  // Decode HTML entities
+  text = decodeHtmlEntities(text);
+
+  // Clean up whitespace per line: collapse multiple spaces/tabs to single space, trim
   text = text
     .split('\n')
     .map((line) => line.replace(/[ \t]+/g, ' ').trim())
     .join('\n');
 
-  // Collapse excessive newlines to max 2
+  // Collapse excessive newlines: max 2 consecutive blank lines
   text = text.replace(/\n{3,}/g, '\n\n');
 
   // Remove boilerplate lines
@@ -109,8 +165,13 @@ function htmlToPlainText(html) {
     .filter((line) => !isBoilerplateLine(line))
     .join('\n');
 
-  // Final trim
-  return text.trim();
+  // Remove trailing bare URLs (often tracking links at end of newsletters)
+  text = text.replace(/\n(?:https?:\/\/\S+\n?){3,}$/g, '');
+
+  // Final cleanup: collapse again after boilerplate removal and trim
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+
+  return text;
 }
 
 /* ---------- Post-processing: remove subject from body, clean newsletter cruft ---------- */

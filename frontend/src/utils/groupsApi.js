@@ -64,51 +64,50 @@ function escapeRegex(str) {
 
 /**
  * Match email against a group's rules using word-boundary matching.
- * - Keywords use word boundary regex to avoid false positives
- * - Domains match against the sender's domain
- * - Senders match against the full from address
+ *
+ * Matching strategy to avoid false positives:
+ * - Keywords are checked against subject + snippet + sender only (NOT full body,
+ *   because long email bodies cause tons of false positives with common words).
+ * - Domains match against the sender's email domain.
+ * - Senders match against the full from address.
+ * - All keyword matches use word boundaries to prevent partial-word hits.
  */
 export function matchEmailToGroup(email, group) {
+  // Use subject + snippet + from for keyword matching (NOT body_plain — too noisy)
   const searchText = [
     email.subject,
     email.snippet,
-    email.body_plain,
-    email.body,
   ].filter(Boolean).join(' ').toLowerCase()
 
   const from = (email.from_address || email.sender || '').toLowerCase()
   const domain = from.includes('@') ? from.split('@').pop().replace(/>$/, '') : ''
 
-  // Check keywords with word boundary matching
-  for (const kw of group.match_keywords || []) {
-    if (!kw) continue
-    const kwLower = String(kw).toLowerCase().trim()
-    if (!kwLower) continue
-
-    // For short keywords (<=3 chars), require exact word boundary
-    // For longer keywords, also use word boundary to avoid false matches
-    try {
-      const regex = new RegExp(`\\b${escapeRegex(kwLower)}\\b`, 'i')
-      if (regex.test(searchText) || regex.test(from)) return true
-    } catch {
-      // Fallback to includes if regex fails
-      if (searchText.includes(kwLower)) return true
-    }
-  }
-
-  // Check domains - match against sender domain
+  // 1. Check domains FIRST (most reliable signal)
   for (const d of group.match_domains || []) {
     if (!d) continue
     const domainLower = String(d).toLowerCase().trim()
     if (!domainLower) continue
-    // Domain match: exact or subdomain (e.g., "mcmaster.ca" matches "mail.mcmaster.ca")
     if (domain === domainLower || domain.endsWith('.' + domainLower)) return true
   }
 
-  // Check senders - match against full from address
+  // 2. Check senders
   for (const s of group.match_senders || []) {
     if (!s) continue
     if (from.includes(String(s).toLowerCase())) return true
+  }
+
+  // 3. Check keywords with strict word boundary matching
+  for (const kw of group.match_keywords || []) {
+    if (!kw) continue
+    const kwLower = String(kw).toLowerCase().trim()
+    if (!kwLower || kwLower.length < 2) continue // Skip single-char keywords
+
+    try {
+      const regex = new RegExp(`\\b${escapeRegex(kwLower)}\\b`, 'i')
+      if (regex.test(searchText) || regex.test(from)) return true
+    } catch {
+      if (searchText.includes(kwLower)) return true
+    }
   }
 
   return false

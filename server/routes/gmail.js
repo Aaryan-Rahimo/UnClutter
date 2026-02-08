@@ -20,7 +20,82 @@ gmailRouter.use(async (req, res, next) => {
   next();
 });
 
-gmailRouter.get('/sync', async (req, res) => {
+/* ── Default groups created on first sync ── */
+const DEFAULT_GROUPS = [
+  {
+    name: 'Promotions',
+    description: 'Deals, offers, and marketing emails',
+    color: '#f4b400',
+    match_keywords: [
+      'sale', 'deal', 'offer', 'discount', 'coupon', 'promo',
+      'limited time', 'special offer', 'shop now', 'buy now',
+      'unsubscribe', 'newsletter', 'promotional', 'off your',
+      'free shipping', 'exclusive', 'save', 'clearance',
+    ],
+    match_domains: [],
+    sort_order: 1,
+  },
+  {
+    name: 'Updates',
+    description: 'Receipts, confirmations, and account updates',
+    color: '#ab47bc',
+    match_keywords: [
+      'receipt', 'confirmation', 'order', 'shipped', 'delivered',
+      'tracking', 'invoice', 'payment', 'statement', 'your account',
+      'security alert', 'verify', 'password', 'signed in',
+    ],
+    match_domains: [],
+    sort_order: 2,
+  },
+  {
+    name: 'Social',
+    description: 'Social media notifications',
+    color: '#db4437',
+    match_keywords: [
+      'facebook', 'twitter', 'instagram', 'linkedin', 'reddit',
+      'notification', 'commented', 'liked', 'mentioned you',
+      'tagged you', 'friend request', 'new follower',
+    ],
+    match_domains: ['facebookmail.com', 'linkedin.com', 'twitter.com', 'reddit.com'],
+    sort_order: 3,
+  },
+];
+
+async function ensureDefaultGroups(accountId) {
+  try {
+    const { data: existing } = await supabase
+      .from('user_groups')
+      .select('id')
+      .eq('account_id', accountId)
+      .limit(1);
+
+    // If user already has groups, skip
+    if (existing && existing.length > 0) return;
+
+    console.log('[sync] Creating default groups for account:', accountId);
+    for (const g of DEFAULT_GROUPS) {
+      const { error } = await supabase.from('user_groups').insert({
+        account_id: accountId,
+        name: g.name,
+        description: g.description,
+        color: g.color,
+        match_keywords: g.match_keywords,
+        match_domains: g.match_domains,
+        match_senders: [],
+        sort_order: g.sort_order,
+        updated_at: new Date().toISOString(),
+      });
+      if (error && error.code !== '23505') {
+        console.error('[sync] Error creating default group:', g.name, error.message);
+      }
+    }
+    console.log('[sync] Default groups created');
+  } catch (err) {
+    console.error('[sync] ensureDefaultGroups error:', err.message);
+  }
+}
+
+gmailRouter.post('/sync', async (req, res) => {
   const { account } = req;
   try {
     const emails = await fetchLatestEmails(account.access_token, 50);
@@ -47,6 +122,9 @@ gmailRouter.get('/sync', async (req, res) => {
         { onConflict: 'account_id,gmail_id' }
       );
     }
+
+    // Create default groups on first sync (non-blocking)
+    ensureDefaultGroups(account.accountId).catch(() => {});
 
     res.json({ synced: emails.length });
   } catch (err) {

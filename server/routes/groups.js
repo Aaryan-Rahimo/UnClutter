@@ -43,13 +43,27 @@ groupsRouter.post('/', async (req, res) => {
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ error: 'name required' });
   }
+  const trimmedName = name.trim();
+
+  // Check for duplicate group name
+  const { data: existing } = await supabase
+    .from('user_groups')
+    .select('id')
+    .eq('account_id', req.accountId)
+    .ilike('name', trimmedName)
+    .limit(1);
+
+  if (existing && existing.length > 0) {
+    return res.status(409).json({ error: `A group named "${trimmedName}" already exists. Try a different name or edit the existing group.` });
+  }
+
   const { data: groups } = await supabase.from('user_groups').select('sort_order').eq('account_id', req.accountId);
   const maxOrder = (groups || []).reduce((m, g) => Math.max(m, g.sort_order || 0), 0);
   const { data, error } = await supabase
     .from('user_groups')
     .insert({
       account_id: req.accountId,
-      name: name.trim(),
+      name: trimmedName,
       description: String(description || '').trim(),
       color: String(color || '#5f6368').trim(),
       match_keywords: Array.isArray(match_keywords) ? match_keywords : [],
@@ -62,6 +76,9 @@ groupsRouter.post('/', async (req, res) => {
     .single();
   if (error) {
     console.error(error);
+    if (error.code === '23505') {
+      return res.status(409).json({ error: `A group named "${trimmedName}" already exists` });
+    }
     return res.status(500).json({ error: 'Failed to create group' });
   }
   res.json({ group: data });

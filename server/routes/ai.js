@@ -16,11 +16,29 @@ import {
   chatWithGroq,
   summarizeEmailWithGroq,
   suggestGroupFromIntent as suggestGroupFromIntentGroq,
+  extractJSON,
 } from '../lib/groq.js';
 import { suggestGroupFromIntent as suggestGroupFromIntentGemini } from '../lib/gemini.js';
 
 export const aiRouter = Router();
 const supabase = createClient(config.supabase.url, config.supabase.serviceRoleKey);
+
+/* Color palette for AI-created groups — cycles so each new group gets a different color */
+const GROUP_COLORS = [
+  '#4285f4', '#0f9d58', '#f4b400', '#db4437', '#ab47bc',
+  '#ff6d00', '#00897b', '#e8710a', '#185abc', '#c5221f',
+];
+
+async function pickGroupColor(accountId) {
+  const { data: groups } = await supabase
+    .from('user_groups')
+    .select('color')
+    .eq('account_id', accountId);
+  const usedColors = (groups || []).map((g) => g.color);
+  // Pick the first color not yet used, or cycle back
+  const unused = GROUP_COLORS.find((c) => !usedColors.includes(c));
+  return unused || GROUP_COLORS[(groups || []).length % GROUP_COLORS.length];
+}
 
 function requireSession(req, res, next) {
   const sessionId = req.headers['x-session-id'];
@@ -72,12 +90,92 @@ aiRouter.post('/chat', async (req, res) => {
   }
   const history = Array.isArray(messages) ? messages : [];
   const context = { selectedEmail, emailsPreview: Array.isArray(emailsPreview) ? emailsPreview.slice(0, 25) : [] };
+
+  console.log('=== CHAT REQUEST ===');
+  console.log('User message:', message);
+  console.log('Provider:', provider);
+
   try {
-    const text =
+    const aiText =
       provider === 'groq'
         ? await chatWithGroq(config.groq.apiKey, history, message, context)
         : await chatWithGemini(config.gemini.apiKey, history, message, context);
-    res.json({ text });
+
+    console.log('AI response (first 500):', (aiText || '').slice(0, 500));
+
+    // ── Check if AI responded with a group creation JSON ──
+    const parsed = extractJSON(aiText);
+    if (parsed && parsed.action === 'create_group' && parsed.name && Array.isArray(parsed.keywords) && parsed.keywords.length > 0) {
+      console.log('=== GROUP CREATION DETECTED IN CHAT ===');
+      console.log('Group name:', parsed.name);
+      console.log('Keywords:', parsed.keywords);
+      console.log('Description:', parsed.description);
+
+      try {
+        const name = String(parsed.name).trim().slice(0, 50);
+        const description = String(parsed.description || '').trim();
+        const keywords = parsed.keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean);
+        const domains = Array.isArray(parsed.domains) ? parsed.domains.map(d => String(d).toLowerCase().trim()).filter(Boolean) : [];
+
+        // Check for duplicate
+        const { data: existingGroup } = await supabase
+          .from('user_groups')
+          .select('id, name')
+          .eq('account_id', req.accountId)
+          .ilike('name', name)
+          .limit(1);
+
+        if (existingGroup && existingGroup.length > 0) {
+          console.log('Duplicate group name found:', name);
+          return res.json({
+            text: `A group named "${name}" already exists. Try a different name or edit the existing group.`,
+            action: 'chat',
+          });
+        }
+
+        const { data: groups } = await supabase.from('user_groups').select('sort_order').eq('account_id', req.accountId);
+        const maxOrder = (groups || []).reduce((m, g) => Math.max(m, g.sort_order || 0), 0);
+        const groupColor = await pickGroupColor(req.accountId);
+
+        const { data: group, error: dbError } = await supabase
+          .from('user_groups')
+          .insert({
+            account_id: req.accountId,
+            name,
+            description,
+            color: groupColor,
+            match_keywords: keywords,
+            match_domains: domains,
+            match_senders: [],
+            sort_order: maxOrder + 1,
+            updated_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (dbError) {
+          console.error('DB error creating group from chat:', dbError);
+          if (dbError.code === '23505') {
+            return res.json({ text: `A group named "${name}" already exists.`, action: 'chat' });
+          }
+          return res.json({ text: `Failed to create group: ${dbError.message}`, action: 'chat' });
+        }
+
+        console.log('Group created from chat:', group.id, group.name);
+        return res.json({
+          text: `Created group "${name}"${description ? ` — ${description}` : ''}.\n\nKeywords: ${keywords.join(', ')}\n\nSwitch to Grouped view to see your new group.`,
+          action: 'group_created',
+          group,
+        });
+      } catch (createErr) {
+        console.error('Error creating group from chat response:', createErr);
+        return res.json({ text: `I tried to create the group but hit an error: ${createErr.message}`, action: 'chat' });
+      }
+    }
+
+    // ── Normal chat response ──
+    const chatText = parsed?.message || aiText;
+    res.json({ text: chatText, action: 'chat' });
   } catch (e) {
     console.error('Chat error:', e);
     const msg = e?.message || String(e);
@@ -167,9 +265,12 @@ aiRouter.post('/summarize', async (req, res) => {
 });
 
 aiRouter.post('/create-group', async (req, res) => {
+  console.log('=== CREATE GROUP REQUEST ===');
   const provider = getAiProvider();
   if (!provider) return res.status(503).json({ error: 'AI not configured (set GROQ_API_KEY or GEMINI_API_KEY)' });
   const { intent } = req.body ?? {};
+  console.log('Intent:', intent);
+  console.log('Account ID:', req.accountId);
   if (!intent || typeof intent !== 'string') {
     return res.status(400).json({ error: 'intent required (e.g. "create a group for university emails")' });
   }
@@ -179,23 +280,49 @@ aiRouter.post('/create-group', async (req, res) => {
     .eq('account_id', req.accountId)
     .order('received_at', { ascending: false })
     .limit(30);
+  console.log('Sample emails fetched:', (sampleEmails || []).length);
   const suggestGroup = provider === 'groq' ? suggestGroupFromIntentGroq : suggestGroupFromIntentGemini;
   const apiKey = provider === 'groq' ? config.groq.apiKey : config.gemini.apiKey;
   try {
     const suggested = await suggestGroup(apiKey, intent.trim(), sampleEmails || []);
-    const name = suggested.name || intent.slice(0, 50);
-    const description = suggested.description || '';
+    console.log('AI suggested group:', JSON.stringify(suggested));
+    const name = (suggested.name || intent.slice(0, 50)).trim();
+    const description = (suggested.description || '').trim();
     const keywords = Array.isArray(suggested.keywords) ? suggested.keywords : [];
     const domains = Array.isArray(suggested.domains) ? suggested.domains : [];
+
+    if (!name) {
+      console.error('No group name from AI suggestion');
+      return res.status(400).json({ error: 'AI could not determine a group name. Please try again with more detail.' });
+    }
+
+    // Prevent duplicate group names
+    const { data: existingGroup } = await supabase
+      .from('user_groups')
+      .select('id, name')
+      .eq('account_id', req.accountId)
+      .ilike('name', name)
+      .limit(1);
+
+    if (existingGroup && existingGroup.length > 0) {
+      console.log('Duplicate group name found:', name);
+      return res.status(409).json({
+        error: `A group named "${name}" already exists. Try a different name or edit the existing group.`,
+      });
+    }
+
     const { data: groups } = await supabase.from('user_groups').select('sort_order').eq('account_id', req.accountId);
     const maxOrder = (groups || []).reduce((m, g) => Math.max(m, g.sort_order || 0), 0);
+    const groupColor = await pickGroupColor(req.accountId);
+
+    console.log('Inserting group:', name, 'keywords:', keywords, 'domains:', domains);
     const { data: group, error } = await supabase
       .from('user_groups')
       .insert({
         account_id: req.accountId,
-        name: String(name).trim(),
-        description: String(description).trim(),
-        color: '#1a73e8',
+        name: String(name),
+        description: String(description),
+        color: groupColor,
         match_keywords: keywords,
         match_domains: domains,
         match_senders: [],
@@ -205,9 +332,13 @@ aiRouter.post('/create-group', async (req, res) => {
       .select()
       .single();
     if (error) {
-      console.error(error);
-      return res.status(500).json({ error: 'Failed to create group' });
+      console.error('DB insert error:', error);
+      if (error.code === '23505') {
+        return res.status(409).json({ error: `A group named "${name}" already exists` });
+      }
+      return res.status(500).json({ error: 'Failed to create group: ' + error.message });
     }
+    console.log('Group created successfully:', group.id, group.name);
     return res.json({ group, suggested: { name, description, keywords, domains } });
   } catch (e) {
     console.error('Create group error:', e);

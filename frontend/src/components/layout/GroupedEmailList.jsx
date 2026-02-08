@@ -1,40 +1,87 @@
-import { useState, useCallback } from 'react'
-import EmailPreview from '../email/EmailPreview'
+import { useState, useMemo, useCallback, memo } from 'react'
 import { matchEmailToGroup } from '../../utils/groupsApi'
 
-const CATEGORY_ORDER = ['Primary', 'School', 'Finance', 'Work', 'Personal', 'Other']
-const CATEGORY_LABELS = { Primary: 'Primary', School: 'School', Finance: 'Finance', Work: 'Work', Personal: 'Personal', Other: 'Updates' }
-const CATEGORY_COLORS = { Primary: '#1a73e8', School: '#4285f4', Finance: '#34a853', Work: '#f9ab00', Personal: '#ea4335', Other: '#5f6368' }
+/* ── colour palette ── */
+const GROUP_COLORS = [
+  { border: '#4285f4', badge: '#e8f0fe', badgeText: '#1967d2', hoverBg: 'rgba(66,133,244,.04)' },
+  { border: '#0f9d58', badge: '#e6f4ea', badgeText: '#137333', hoverBg: 'rgba(15,157,88,.04)' },
+  { border: '#f4b400', badge: '#fef7e0', badgeText: '#b06000', hoverBg: 'rgba(244,180,0,.04)' },
+  { border: '#db4437', badge: '#fce8e6', badgeText: '#c5221f', hoverBg: 'rgba(219,68,55,.04)' },
+  { border: '#ab47bc', badge: '#f3e8fd', badgeText: '#8e24aa', hoverBg: 'rgba(171,71,188,.04)' },
+  { border: '#ff6d00', badge: '#fff3e0', badgeText: '#e65100', hoverBg: 'rgba(255,109,0,.04)' },
+  { border: '#00897b', badge: '#e0f2f1', badgeText: '#00695c', hoverBg: 'rgba(0,137,123,.04)' },
+  { border: '#9e9e9e', badge: '#f1f3f4', badgeText: '#5f6368', hoverBg: 'rgba(158,158,158,.04)' },
+]
 
-function getCategory(email) {
-  const cat = email.ai_category
-  if (!cat) return 'Primary'
-  if (cat === 'Other') return 'Other'
-  return cat
+function getColorScheme(index) {
+  return GROUP_COLORS[index % GROUP_COLORS.length]
 }
 
-function groupByAiCategory(emails) {
-  const groups = {}
-  for (const e of emails) {
-    const cat = getCategory(e)
-    if (!groups[cat]) groups[cat] = []
-    groups[cat].push(e)
+const COLLAPSED_EMAIL_COUNT = 3 // how many emails visible when collapsed
+
+/* ── helpers ── */
+
+function getSenderName(from) {
+  if (!from) return 'Unknown'
+  const m = from.match(/^"?(.+?)"?\s*<.+>$/)
+  if (m) return m[1].replace(/"/g, '').trim()
+  const parts = from.split('@')
+  const name = parts[0].replace(/[<>"]/g, '').trim()
+  return name.length > 20 ? name.slice(0, 18) + '\u2026' : name
+}
+
+function formatCompactDate(dateStr) {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return dateStr
+  const now = new Date()
+  const diff = now - d
+  if (diff < 24 * 60 * 60 * 1000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  if (diff < 7 * 24 * 60 * 60 * 1000) return d.toLocaleDateString([], { weekday: 'short' })
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+/* ── compact email row ── */
+
+const CompactEmail = memo(function CompactEmail({ email, isSelected, onClick }) {
+  const isUnread = email.is_read === false
+  const isStarred = email.is_starred
+  const sender = getSenderName(email.from_address || email.sender)
+  const date = email.date || formatCompactDate(email.received_at)
+
+  return (
+    <div
+      className={`gc-email ${isSelected ? 'gc-email--selected' : ''} ${isUnread ? 'gc-email--unread' : ''}`}
+      onClick={(e) => { e.stopPropagation(); onClick?.(email) }}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => e.key === 'Enter' && onClick?.(email)}
+    >
+      {isStarred && <span className="gc-email__star" aria-label="Starred">&#9733;</span>}
+      <div className="gc-email__content">
+        <div className="gc-email__top">
+          <span className="gc-email__sender">{sender}</span>
+          <span className="gc-email__date">{date}</span>
+        </div>
+        <div className="gc-email__subject">{email.subject || '(No subject)'}</div>
+        <div className="gc-email__snippet">{email.snippet}</div>
+      </div>
+    </div>
+  )
+})
+
+/* ── build groups ── */
+
+function buildGroups(emails, userGroups) {
+  if (!userGroups || userGroups.length === 0) {
+    return [{ id: '__all__', name: 'All Mail', description: '', color: '#5f6368', emails, match_keywords: [], match_domains: [] }]
   }
-  return CATEGORY_ORDER.filter((id) => groups[id]?.length).map((id) => ({
-    id,
-    name: CATEGORY_LABELS[id] || id,
-    description: '',
-    color: CATEGORY_COLORS[id] || '#5f6368',
-    emails: groups[id] || [],
-  }))
-}
 
-function groupByUserGroups(emails, userGroups) {
   const byGroup = {}
   for (const g of userGroups) {
     byGroup[g.id] = { ...g, emails: [] }
   }
-  byGroup.__unsorted__ = { id: '__unsorted__', name: 'Unsorted', description: 'Emails not matching any group', color: '#9aa0a6', emails: [] }
+  byGroup.__unsorted__ = { id: '__unsorted__', name: 'Unsorted', description: 'Not yet categorized', color: '#9e9e9e', emails: [], match_keywords: [] }
 
   for (const e of emails) {
     let matched = false
@@ -45,16 +92,136 @@ function groupByUserGroups(emails, userGroups) {
         break
       }
     }
-    if (!matched) {
-      byGroup.__unsorted__.emails.push(e)
-    }
+    if (!matched) byGroup.__unsorted__.emails.push(e)
   }
 
-  const list = userGroups.map((g) => byGroup[g.id]).concat(byGroup.__unsorted__)
-  return list.filter((g) => g.emails.length > 0)
+  return [...userGroups.map((g) => byGroup[g.id]), byGroup.__unsorted__]
 }
 
-const PREVIEW_COUNT = 3 // Number of emails to show when collapsed
+/* ── single group card ── */
+
+const GroupCard = memo(function GroupCard({
+  group,
+  colorScheme,
+  isUserGroup,
+  selectedEmailId,
+  onSelectEmail,
+  onEditGroup,
+  onDeleteGroup,
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  const emailCount = group.emails.length
+  const unreadCount = group.emails.filter((e) => !e.is_read).length
+  const keywords = group.match_keywords || []
+  const description = group.description || (keywords.length > 0 ? keywords.slice(0, 5).join(', ') : '')
+  const hasMore = emailCount > COLLAPSED_EMAIL_COUNT
+  const hiddenCount = emailCount - COLLAPSED_EMAIL_COUNT
+  const visibleEmails = expanded ? group.emails : group.emails.slice(0, COLLAPSED_EMAIL_COUNT)
+  const isEmpty = emailCount === 0
+
+  const toggleExpanded = useCallback(() => {
+    if (hasMore) setExpanded((v) => !v)
+  }, [hasMore])
+
+  return (
+    <section
+      className={`gc-card ${expanded ? 'gc-card--expanded' : ''} ${isEmpty ? 'gc-card--empty' : ''}`}
+      style={{ borderLeftColor: colorScheme.border }}
+    >
+      {/* ── header (clickable to expand) ── */}
+      <div
+        className="gc-card__header"
+        onClick={toggleExpanded}
+        role={hasMore ? 'button' : undefined}
+        style={{ cursor: hasMore ? 'pointer' : 'default' }}
+      >
+        <div className="gc-card__title-row">
+          <h3 className="gc-card__name">{group.name}</h3>
+          <span
+            className="gc-card__badge"
+            style={{ backgroundColor: colorScheme.badge, color: colorScheme.badgeText }}
+          >
+            {emailCount}
+          </span>
+          {unreadCount > 0 && (
+            <span className="gc-card__unread">{unreadCount} new</span>
+          )}
+          {hasMore && (
+            <span className={`gc-card__chevron ${expanded ? 'gc-card__chevron--up' : ''}`}>
+              &#9660;
+            </span>
+          )}
+        </div>
+        {isUserGroup && (
+          <div className="gc-card__actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="gc-card__action"
+              title="Edit group"
+              onClick={() => onEditGroup?.(group)}
+              aria-label={`Edit ${group.name}`}
+            >&#9998;</button>
+            <button
+              type="button"
+              className="gc-card__action gc-card__action--danger"
+              title="Delete group"
+              onClick={() => onDeleteGroup?.(group)}
+              aria-label={`Delete ${group.name}`}
+            >&#128465;</button>
+          </div>
+        )}
+      </div>
+
+      {/* ── description ── */}
+      {description && <p className="gc-card__desc">{description}</p>}
+
+      {/* ── email list ── */}
+      <div className="gc-card__emails">
+        {isEmpty ? (
+          <div className="gc-card__empty">
+            <div className="gc-card__empty-icon">&#128233;</div>
+            <p className="gc-card__empty-title">No emails match this group</p>
+            {keywords.length > 0 && (
+              <p className="gc-card__empty-hint">Keywords: {keywords.slice(0, 6).join(', ')}</p>
+            )}
+            {isUserGroup && (
+              <div className="gc-card__empty-actions">
+                <button type="button" className="gc-card__empty-btn" onClick={() => onEditGroup?.(group)}>Edit keywords</button>
+                <button type="button" className="gc-card__empty-btn gc-card__empty-btn--danger" onClick={() => onDeleteGroup?.(group)}>Delete group</button>
+              </div>
+            )}
+          </div>
+        ) : (
+          visibleEmails.map((email) => (
+            <CompactEmail
+              key={email.id}
+              email={email}
+              isSelected={selectedEmailId === email.id}
+              onClick={onSelectEmail}
+            />
+          ))
+        )}
+      </div>
+
+      {/* ── gradient fade + expand toggle ── */}
+      {!expanded && hasMore && (
+        <div className="gc-card__fade" onClick={toggleExpanded} role="button" tabIndex={0}>
+          <span className="gc-card__expand-text">
+            Show {hiddenCount} more email{hiddenCount !== 1 ? 's' : ''} &#9660;
+          </span>
+        </div>
+      )}
+      {expanded && hasMore && (
+        <button type="button" className="gc-card__collapse" onClick={toggleExpanded}>
+          Collapse &#9650;
+        </button>
+      )}
+    </section>
+  )
+})
+
+/* ── main grid ── */
 
 function GroupedEmailList({
   emails = [],
@@ -64,90 +231,27 @@ function GroupedEmailList({
   onEditGroup,
   onDeleteGroup,
 }) {
-  const groups = userGroups.length > 0
-    ? groupByUserGroups(emails, userGroups)
-    : groupByAiCategory(emails)
-
-  // Groups start partially collapsed (showing only PREVIEW_COUNT emails)
-  const [expandedGroups, setExpandedGroups] = useState({})
-
-  const toggleGroup = useCallback((groupId) => {
-    setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }))
-  }, [])
+  const groups = useMemo(() => buildGroups(emails, userGroups), [emails, userGroups])
 
   return (
-    <div className="grouped-grid">
-      {groups.map((group) => {
-        const isExpanded = expandedGroups[group.id] === true
-        const isUserGroup = group.id !== '__unsorted__' && userGroups.some((g) => g.id === group.id)
-        const unreadCount = group.emails.filter((e) => !e.is_read).length
-        const visibleEmails = isExpanded ? group.emails : group.emails.slice(0, PREVIEW_COUNT)
-        const hasMore = group.emails.length > PREVIEW_COUNT
+    <div className="gc-grid">
+      {groups.map((group, idx) => {
+        const isUserGroup = group.id !== '__unsorted__' && group.id !== '__all__' && userGroups.some((g) => g.id === group.id)
+        const colorScheme = group.color
+          ? GROUP_COLORS.find((c) => c.border === group.color) || getColorScheme(idx)
+          : getColorScheme(idx)
 
         return (
-          <section key={group.id} className="grouped-grid__card">
-            <div className="grouped-grid__bar" style={{ backgroundColor: group.color || '#5f6368' }} />
-            <div className="grouped-grid__content">
-              <div className="grouped-grid__header">
-                <div className="grouped-grid__header-left">
-                  <h3 className="grouped-grid__name">{group.name}</h3>
-                  <span className="grouped-grid__count">{group.emails.length}</span>
-                  {unreadCount > 0 && (
-                    <span className="grouped-grid__unread">{unreadCount} new</span>
-                  )}
-                </div>
-                <div className="grouped-grid__header-right">
-                  {isUserGroup && (
-                    <>
-                      <button
-                        type="button"
-                        className="grouped-grid__action-btn"
-                        title="Edit group"
-                        onClick={() => onEditGroup?.(group)}
-                        aria-label={`Edit ${group.name}`}
-                      >
-                        &#9998;
-                      </button>
-                      <button
-                        type="button"
-                        className="grouped-grid__action-btn grouped-grid__action-btn--danger"
-                        title="Delete group"
-                        onClick={() => onDeleteGroup?.(group)}
-                        aria-label={`Delete ${group.name}`}
-                      >
-                        &#128465;
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-              {group.description && (
-                <p className="grouped-grid__desc">{group.description}</p>
-              )}
-              <div className={`grouped-grid__emails ${isExpanded ? 'grouped-grid__emails--expanded' : ''}`}>
-                {visibleEmails.map((email) => (
-                  <EmailPreview
-                    key={email.id}
-                    email={email}
-                    isSelected={selectedEmailId === email.id}
-                    onClick={onSelectEmail}
-                    showKeywordChips={false}
-                  />
-                ))}
-              </div>
-              {hasMore && (
-                <button
-                  type="button"
-                  className="grouped-grid__toggle"
-                  onClick={() => toggleGroup(group.id)}
-                >
-                  {isExpanded
-                    ? 'Show less'
-                    : `View all ${group.emails.length} emails`}
-                </button>
-              )}
-            </div>
-          </section>
+          <GroupCard
+            key={group.id}
+            group={group}
+            colorScheme={colorScheme}
+            isUserGroup={isUserGroup}
+            selectedEmailId={selectedEmailId}
+            onSelectEmail={onSelectEmail}
+            onEditGroup={onEditGroup}
+            onDeleteGroup={onDeleteGroup}
+          />
         )
       })}
     </div>

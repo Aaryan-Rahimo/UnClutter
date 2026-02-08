@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { getAuthHeaders } from '../../utils/auth'
 import { createGroupFromIntent } from '../../utils/groupsApi'
 
@@ -30,22 +30,122 @@ function isRateLimitError(errMsg) {
   return lower.includes('rate limit') || lower.includes('429') || lower.includes('too many requests') || lower.includes('rate_limit')
 }
 
-function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], onGroupsChange, onToast }) {
+/**
+ * Broadly detect whether the user is asking to create / make a group.
+ * We want to catch as many natural-language variants as possible.
+ */
+function isGroupCreationIntent(text) {
+  const lower = text.toLowerCase().trim()
+  // Direct patterns: "create a group …", "make a group …", "add a group …"
+  if (/^(create|make|add|set\s*up|start)\s+(a\s+)?(new\s+)?(email\s+)?group/i.test(lower)) return true
+  // "group together emails from …", "group all emails from …"
+  if (/^group\s+(together\s+)?(all\s+)?(emails?\s+)?(from|about|for|related)/i.test(lower)) return true
+  // "I want a group for …", "I need a group for …", "can you create a group …"
+  if (/i\s+(want|need|would\s+like)\s+(a\s+)?(new\s+)?(email\s+)?group/i.test(lower)) return true
+  if (/can\s+you\s+(create|make|add|set\s*up)\s+(a\s+)?(new\s+)?group/i.test(lower)) return true
+  // "new group for …", "new group called …"
+  if (/^new\s+group\s+(for|called|named|about)/i.test(lower)) return true
+  // "organize my … emails into a group"
+  if (/organiz?e\s+.{2,30}\s+into\s+(a\s+)?group/i.test(lower)) return true
+  // "sort my … emails"
+  if (/^sort\s+(my\s+)?.+\s+emails?/i.test(lower)) return true
+  return false
+}
+
+/**
+ * Extract the intent/topic from the group creation message.
+ * e.g. "create a group for university emails" -> "university emails"
+ */
+function extractGroupIntent(text) {
+  const lower = text.trim()
+  // Try stripping common prefixes
+  const patterns = [
+    /^(?:create|make|add|set\s*up|start)\s+(?:a\s+)?(?:new\s+)?(?:email\s+)?group\s+(?:for|called|named|about|of|with)?\s*/i,
+    /^group\s+(?:together\s+)?(?:all\s+)?(?:emails?\s+)?(?:from|about|for|related\s+to)?\s*/i,
+    /^(?:i\s+(?:want|need|would\s+like)\s+(?:a\s+)?(?:new\s+)?(?:email\s+)?group\s+(?:for|called|named|about)?\s*)/i,
+    /^(?:can\s+you\s+(?:create|make|add|set\s*up)\s+(?:a\s+)?(?:new\s+)?group\s+(?:for|called|named|about)?\s*)/i,
+    /^new\s+group\s+(?:for|called|named|about)\s*/i,
+    /^(?:organiz?e\s+(?:my\s+)?)/i,
+    /^sort\s+(?:my\s+)?/i,
+  ]
+  let result = lower
+  for (const p of patterns) {
+    result = result.replace(p, '')
+  }
+  // Clean trailing "emails", "into a group"
+  result = result.replace(/\s*(?:into\s+(?:a\s+)?group|emails?)\s*$/i, '').trim()
+  return result || text.trim()
+}
+
+/**
+ * Parse message text and replace "Email N" / "(Email N)" references with
+ * clickable links that select the referenced email.
+ */
+function renderMessageWithEmailLinks(text, emails, onSelectEmail) {
+  if (!text || !emails || emails.length === 0 || !onSelectEmail) return text
+
+  // Match patterns like "Email 13", "(Email 13)", "email 19"
+  const parts = text.split(/((?:\()?Email\s+\d+(?:\))?)/gi)
+  if (parts.length === 1) return text // no matches
+
+  return parts.map((part, i) => {
+    const match = part.match(/\(?Email\s+(\d+)\)?/i)
+    if (!match) return part
+
+    const emailIndex = parseInt(match[1], 10) - 1 // AI uses 1-indexed
+    const email = emails[emailIndex]
+    if (!email) return part // index out of range, keep as text
+
+    const subject = email.subject || '(No subject)'
+    const sender = email.sender || email.from_address || ''
+    const label = sender ? `${sender}: ${subject}` : subject
+
+    return (
+      <button
+        key={`email-link-${i}`}
+        type="button"
+        className="chatbot-sidebar__email-link"
+        onClick={() => onSelectEmail(email)}
+        title={label}
+      >
+        {subject.length > 40 ? subject.slice(0, 37) + '...' : subject}
+      </button>
+    )
+  })
+}
+
+function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], onGroupsChange, onToast, onSelectEmail }) {
   const [messages, setMessages] = useState(INITIAL_MESSAGES)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [retryCountdown, setRetryCountdown] = useState(0)
   const [pendingRetry, setPendingRetry] = useState(null)
+  const [isAtBottom, setIsAtBottom] = useState(true)
   const countdownRef = useRef(null)
   const threadRef = useRef(null)
+  const textareaRef = useRef(null)
 
-  // Auto-scroll chat thread to bottom
+  // Auto-scroll chat thread to bottom when new messages arrive (only if user is near bottom)
   useEffect(() => {
-    if (threadRef.current) {
-      threadRef.current.scrollTop = threadRef.current.scrollHeight
+    if (threadRef.current && isAtBottom) {
+      threadRef.current.scrollTo({ top: threadRef.current.scrollHeight, behavior: 'smooth' })
     }
   }, [messages, loading])
+
+  // Track whether user is scrolled to the bottom
+  const handleThreadScroll = useCallback(() => {
+    const el = threadRef.current
+    if (!el) return
+    const { scrollTop, scrollHeight, clientHeight } = el
+    setIsAtBottom(scrollHeight - scrollTop - clientHeight < 60)
+  }, [])
+
+  const scrollToBottom = useCallback(() => {
+    if (threadRef.current) {
+      threadRef.current.scrollTo({ top: threadRef.current.scrollHeight, behavior: 'smooth' })
+    }
+  }, [])
 
   // Countdown timer for rate limit retry
   useEffect(() => {
@@ -76,19 +176,22 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
       setPendingRetry(null)
       setRetryCountdown(0)
 
-      // Group creation intent detection
-      const isCreateGroup = /^(create|make|add)\s+(a\s+)?group\s+for\s+/i.test(trimmed) || /^group\s+(together\s+)?(all\s+)?(emails\s+)?from\s+/i.test(trimmed)
-      if (isCreateGroup) {
+      // ── Group creation intent detection (broad matching) ──
+      if (isGroupCreationIntent(trimmed)) {
         setMessages((prev) => [...prev, userMsg])
         setLoading(true)
         try {
-          const intent = trimmed.replace(/^(create|make|add)\s+(a\s+)?group\s+for\s+/i, '').replace(/^group\s+(together\s+)?(all\s+)?(emails\s+)?from\s+/i, '')
-          const { group, suggested } = await createGroupFromIntent(intent.trim() || trimmed)
+          const intent = extractGroupIntent(trimmed)
+          console.log('[ChatbotSidebar] Group creation intent detected:', intent)
+          const { group, suggested } = await createGroupFromIntent(intent)
+          console.log('[ChatbotSidebar] Group created:', group, suggested)
           onGroupsChange?.()
-          const reply = `Created group "${group.name}"${suggested?.description ? ` - ${suggested.description}` : ''}.\n\nKeywords: ${(suggested?.keywords || []).slice(0, 8).join(', ') || 'none'}\n\nSwitch to Grouped view in the sidebar to see your new group.`
+          const keywords = suggested?.keywords || group?.match_keywords || []
+          const reply = `Created group "${group.name}"${suggested?.description ? ` — ${suggested.description}` : ''}.\n\nKeywords: ${keywords.slice(0, 8).join(', ') || 'none'}\n\nSwitch to Grouped view in the sidebar to see your new group.`
           setMessages((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', text: reply }])
           onToast?.({ type: 'success', message: `Group "${group.name}" created successfully` })
         } catch (err) {
+          console.error('[ChatbotSidebar] Group creation error:', err)
           const errMsg = err.message || 'Failed to create group'
           if (isRateLimitError(errMsg)) {
             setError('AI is temporarily busy due to rate limits. Please wait a moment and try again.')
@@ -97,19 +200,19 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
           } else {
             setError(errMsg)
           }
-          onToast?.({ type: 'error', message: 'Failed to create group' })
+          onToast?.({ type: 'error', message: errMsg })
         } finally {
           setLoading(false)
         }
         return
       }
 
-      // Regular chat: send only user message; backend builds context from selectedEmail + emails
+      // ── Regular chat: backend may also return group_created action ──
       setMessages((prev) => [...prev, userMsg])
       setLoading(true)
 
       try {
-        const history = messages.map(({ role, text }) => ({ role, text }))
+        const history = messages.map(({ role, text: t }) => ({ role, text: t }))
         const body = {
           messages: history,
           message: trimmed,
@@ -126,7 +229,16 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
           throw new Error(data.error || 'Chat failed')
         }
         const data = await res.json()
+        console.log('[ChatbotSidebar] Chat response:', data)
+
         setMessages((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', text: data.text || '' }])
+
+        // If backend detected a group creation action, refresh groups
+        if (data.action === 'group_created' && data.group) {
+          console.log('[ChatbotSidebar] Backend created group via chat:', data.group)
+          onGroupsChange?.()
+          onToast?.({ type: 'success', message: `Group "${data.group.name}" created successfully` })
+        }
       } catch (err) {
         const errMsg = err.message || 'Something went wrong.'
         if (isRateLimitError(errMsg)) {
@@ -209,13 +321,15 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
         {selectedEmail && ' \u2022 Focused on selected email'}
       </p>
 
-      <div className="chatbot-sidebar__thread" ref={threadRef}>
+      <div className="chatbot-sidebar__thread" ref={threadRef} onScroll={handleThreadScroll}>
         {messages.map((msg) => (
           <div
             key={msg.id}
             className={`chatbot-sidebar__message chatbot-sidebar__message--${msg.role}`}
           >
-            {msg.text}
+            {msg.role === 'assistant'
+              ? renderMessageWithEmailLinks(msg.text, emails, onSelectEmail)
+              : msg.text}
           </div>
         ))}
         {loading && (
@@ -247,6 +361,18 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
         )}
       </div>
 
+      {/* Scroll-to-bottom button — positioned outside thread so it doesn't scroll away */}
+      {!isAtBottom && messages.length > 2 && (
+        <button
+          type="button"
+          className="chatbot-sidebar__scroll-bottom"
+          onClick={scrollToBottom}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+          Scroll to bottom
+        </button>
+      )}
+
       <div className="chatbot-sidebar__suggestions">
         {suggestedPrompts.map((prompt) => (
           <button
@@ -263,14 +389,22 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
 
       <form className="chatbot-sidebar__input-wrap" onSubmit={handleSubmit}>
         <textarea
+          ref={textareaRef}
           className="chatbot-sidebar__input chatbot-sidebar__textarea"
           placeholder="Ask about your emails..."
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value)
+            // Auto-resize textarea
+            if (textareaRef.current) {
+              textareaRef.current.style.height = 'auto'
+              textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`
+            }
+          }}
           onKeyDown={handleKeyDown}
           disabled={loading}
           aria-label="Message"
-          rows={2}
+          rows={1}
         />
         <button
           type="submit"

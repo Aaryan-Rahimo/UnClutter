@@ -18,7 +18,7 @@ const EMAIL_SUMMARY_PROMPT = `Summarize this email in 3–5 short bullet points.
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-async function groqChat(apiKey, messages, retries = 3) {
+async function groqChat(apiKey, messages, { retries = 3, temperature = 0.2 } = {}) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const groqMessages = messages.map((m) => ({
       role: m.role === 'model' ? 'assistant' : (m.role === 'system' ? 'system' : (m.role || 'user')),
@@ -33,7 +33,7 @@ async function groqChat(apiKey, messages, retries = 3) {
       body: JSON.stringify({
         model: MODEL,
         messages: groqMessages,
-        temperature: 0.2,
+        temperature,
       }),
     });
     if (res.status === 429 && attempt < retries) {
@@ -62,7 +62,33 @@ export async function summarizeEmailWithGroq(apiKey, subject, body) {
   return groqChat(apiKey, [{ role: 'user', text: content }]);
 }
 
-const INBOX_CONTEXT_SYSTEM = `You are the UnClutter assistant. You have FULL ACCESS to the user's email inbox. Use the email data provided to answer questions. Extract deadlines, action items, and commitments from the emails. Give specific answers based on the content. Never say you don't have access to their emails.`;
+/* ── Inbox-aware chat ── */
+
+const INBOX_CONTEXT_SYSTEM = `You are the UnClutter email assistant. You have FULL ACCESS to the user's email inbox.
+
+CAPABILITIES:
+1. Answer questions about emails (deadlines, action items, senders, etc.)
+2. Summarize emails or the inbox
+3. Create email groups to organize emails
+
+RULES:
+- Use the email data provided to answer questions. Give specific, factual answers.
+- Never say you don't have access to emails - you DO.
+- Extract deadlines, action items, and commitments from the actual email content.
+
+GROUP CREATION:
+If the user asks you to create, make, or organize a group of emails, you MUST respond with ONLY a JSON object in this exact format (no other text, no markdown, no code blocks):
+{"action":"create_group","name":"GroupName","keywords":["keyword1","keyword2","keyword3"],"description":"Brief description of what this group contains"}
+
+Rules for group creation JSON:
+- name: Short name, 1-3 words
+- keywords: SPECIFIC words that appear in relevant emails. Be precise. Use lowercase.
+- description: One sentence
+- Start your response with { and end with }
+- Do NOT wrap in markdown code blocks
+- Do NOT add any text before or after the JSON
+
+For ALL other messages (questions, summaries, conversation), respond with plain text naturally.`;
 
 function buildEmailContextBlock(context) {
   if (!context) return '';
@@ -124,6 +150,8 @@ export async function summarizeWithGroq(apiKey, thread) {
   return groqChat(apiKey, [{ role: 'user', text: content }]);
 }
 
+/* ── Group suggestion from intent ── */
+
 const CREATE_GROUP_PROMPT = `You help users create email groups. Given a user's intent and sample emails, output a JSON object with these fields:
 - name: short group name (1-3 words)
 - description: one sentence describing the group
@@ -141,12 +169,56 @@ export async function suggestGroupFromIntent(apiKey, userIntent, sampleEmails) {
     .map((e) => `From: ${e.from_address || ''} | Subject: ${e.subject || ''} | Snippet: ${(e.snippet || '').slice(0, 100)}`)
     .join('\n');
   const content = `${CREATE_GROUP_PROMPT}\n\nUser intent: "${userIntent}"\n\nSample emails:\n${samples || '(none)'}\n\nOutput JSON:`;
-  const raw = await groqChat(apiKey, [{ role: 'user', text: content }]);
-  const cleaned = raw.replace(/```json?\s*/g, '').replace(/```\s*/g, '').trim();
+
+  console.log('[groq] suggestGroupFromIntent - calling Groq with intent:', userIntent);
+  const raw = await groqChat(apiKey, [{ role: 'user', text: content }], { temperature: 0.1 });
+  console.log('[groq] suggestGroupFromIntent - raw response:', raw);
+
+  const parsed = extractJSON(raw);
+  if (parsed) {
+    console.log('[groq] suggestGroupFromIntent - parsed:', parsed);
+    return parsed;
+  }
+
+  console.warn('[groq] suggestGroupFromIntent - could not parse JSON, using fallback');
+  return { name: userIntent.slice(0, 30), description: '', keywords: [], domains: [] };
+}
+
+/**
+ * Extract and parse a JSON object from a string that may contain extra text,
+ * markdown code blocks, or other noise around the JSON.
+ */
+export function extractJSON(text) {
+  if (!text || typeof text !== 'string') return null;
+  let s = text.trim();
+
+  // Remove markdown code fences: ```json ... ``` or ``` ... ```
+  const codeBlockMatch = s.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  if (codeBlockMatch) {
+    s = codeBlockMatch[1].trim();
+  }
+
+  // Extract first JSON object: everything between first { and last }
+  const jsonMatch = s.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    s = jsonMatch[0];
+  } else {
+    return null;
+  }
+
   try {
-    return JSON.parse(cleaned);
+    return JSON.parse(s);
   } catch {
-    return { name: userIntent.slice(0, 30), description: '', keywords: [], domains: [] };
+    // Try fixing common issues: trailing commas, single quotes
+    try {
+      const fixed = s
+        .replace(/,\s*\}/g, '}')
+        .replace(/,\s*\]/g, ']')
+        .replace(/'/g, '"');
+      return JSON.parse(fixed);
+    } catch {
+      return null;
+    }
   }
 }
 
