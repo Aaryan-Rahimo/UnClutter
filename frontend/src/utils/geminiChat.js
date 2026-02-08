@@ -69,7 +69,9 @@ export async function summarizeEmail(apiKey, subject, body) {
   const genAI = new GoogleGenerativeAI(apiKey)
   const model = genAI.getGenerativeModel({ model: MODEL })
 
-  const prompt = `Summarize this email in 3–5 short bullet points. Be concise.
+  const prompt = `Summarize this email in 3–5 natural-sounding bullet points.
+Write in plain English with full sentences, like a helpful human assistant.
+Include any deadlines, actions, or key decisions if present. Keep it brief.
 
 Subject: ${subject}
 
