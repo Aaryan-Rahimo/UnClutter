@@ -1020,6 +1020,44 @@ body.resizing-panels .dashboard--gmail {
   .groups-grid-wrapper { padding: 12px; }
 }
 
+/* ── category cards (CardGrid / search results) ── */
+.card-grid-wrap { padding-top: 0.25rem; }
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+.category-card {
+  border: 1px solid var(--gmail-border-light, #e8eaed);
+  border-radius: 8px;
+  background: var(--gmail-white, #fff);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  border-left: 4px solid #dadce0;
+  transition: box-shadow .2s ease, transform .2s ease;
+}
+.category-card:hover {
+  box-shadow: 0 4px 14px rgba(0,0,0,.12);
+  transform: translateY(-2px);
+}
+.category-card--university { border-left-color: #1a73e8; }
+.category-card--action { border-left-color: #34a853; }
+.category-card--promotions { border-left-color: #f9ab00; }
+.category-card--unsorted { border-left-color: #5f6368; }
+.category-card--social { border-left-color: #ea4335; }
+.category-card--updates { border-left-color: #9334e6; }
+.category-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--gmail-border-light, #e8eaed);
+}
+.category-card__name { margin: 0; font-size: 0.9375rem; font-weight: 500; }
+.category-card__count { font-size: 0.75rem; color: #5f6368; }
+.category-card__description { margin: 0; padding: 0 1rem 0.5rem; font-size: 0.75rem; color: #5f6368; }
+.category-card__emails { display: flex; flex-direction: column; max-height: 280px; overflow-y: auto; }
+
 /* ── individual card (compact by default) ── */
 .gc-card {
   background: #fff;
@@ -1050,8 +1088,8 @@ body.resizing-panels .dashboard--gmail {
 }
 
 .gc-card:hover {
-  box-shadow: 0 3px 10px rgba(0,0,0,.12), 0 2px 5px rgba(0,0,0,.08);
-  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0,0,0,.12), 0 3px 8px rgba(0,0,0,.08);
+  transform: translateY(-3px);
 }
 
 /* ── card header ── */
@@ -1256,13 +1294,16 @@ body.resizing-panels .dashboard--gmail {
   padding: 7px 14px;
   border-bottom: 1px solid #f1f3f4;
   cursor: pointer;
-  transition: background .12s;
+  transition: background .15s ease, box-shadow .15s ease;
   position: relative;
 }
 
 .gc-email:last-child { border-bottom: none; }
 
-.gc-email:hover { background: #f8f9fa; }
+.gc-email:hover {
+  background: #f8f9fa;
+  box-shadow: inset 3px 0 0 #1a73e8;
+}
 
 .gc-email--selected {
   background: #e8f0fe !important;
@@ -1387,7 +1428,7 @@ body.resizing-panels .dashboard--gmail {
 .email-preview:hover {
   background: #f8f9fa;
   border-color: var(--gmail-border);
-  box-shadow: 0 1px 4px rgba(26, 115, 232, 0.08);
+  box-shadow: 0 1px 4px rgba(26, 115, 232, 0.08), inset 3px 0 0 var(--gmail-blue);
   z-index: 1;
 }
 
