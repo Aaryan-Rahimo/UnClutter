@@ -6,7 +6,7 @@ import EmailList from '../components/layout/EmailList'
 import GroupedEmailList from '../components/layout/GroupedEmailList'
 import SortControls from '../components/layout/SortControls'
 import EmailDetail from '../components/email/EmailDetail'
-import EmailComposer from '../components/email/EmailComposer'
+import ComposeModal from '../components/email/ComposeModal'
 import ChatbotSidebar from '../components/layout/ChatbotSidebar'
 import Toast from '../components/layout/Toast'
 import GroupEditModal from '../components/layout/GroupEditModal'
@@ -18,7 +18,16 @@ import {
   fetchEmail,
   mapEmailFromBackend,
   categorizeEmail,
-  sendEmail,
+  sendNewEmail,
+  replyToEmail,
+  deleteEmail,
+  archiveEmail,
+  starEmail,
+  pinEmail,
+  toggleReadEmail,
+  fetchFolder,
+  fetchDrafts,
+  fetchLabelCounts,
 } from '../utils/gmailApi'
 import { fetchGroups, updateGroup, deleteGroup } from '../utils/groupsApi'
 import '../styles/home.css'
@@ -83,12 +92,6 @@ const MIN_CENTER_W = 300
 
 function clamp(val, min, max) { return Math.max(min, Math.min(max, val)) }
 
-function extractEmailAddress(value) {
-  if (!value) return ''
-  const match = value.match(/<([^>]+)>/)
-  return (match ? match[1] : value).trim()
-}
-
 function prefixSubject(subject, prefix) {
   const clean = (subject || '').trim()
   if (!clean) return prefix.trim()
@@ -115,8 +118,13 @@ function Home() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [lastSynced, setLastSynced] = useState(null)
 
+  const [activeFolder, setActiveFolder] = useState('inbox')
+  const [folderEmails, setFolderEmails] = useState([]) // emails for non-inbox folders
+  const [folderLoading, setFolderLoading] = useState(false)
+  const [labelCounts, setLabelCounts] = useState({})
+
   const [user, setUser] = useState(null)
-  const [emails, setEmails] = useState([])
+  const [emails, setEmails] = useState([]) // inbox emails (locally cached)
   const [userGroups, setUserGroups] = useState([])
   const [loading, setLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -126,21 +134,13 @@ function Home() {
   // Toast state
   const [toasts, setToasts] = useState([])
 
-  // Composer state
-  const [composerOpen, setComposerOpen] = useState(false)
-  const [composerDraft, setComposerDraft] = useState({
-    to: '',
-    subject: '',
-    body: '',
-    threadId: null,
-    title: 'New message',
-  })
-  const [sendingEmail, setSendingEmail] = useState(false)
-  const [sendError, setSendError] = useState(null)
-
   // Group edit modal
   const [editingGroup, setEditingGroup] = useState(null)
   const [deletingGroup, setDeletingGroup] = useState(null)
+
+  // Compose email modal
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [composeInitial, setComposeInitial] = useState({}) // { to, subject, body }
 
   // Resizable panels
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -167,61 +167,6 @@ function Home() {
   const dismissToast = useCallback((id) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
   }, [])
-
-  const openComposer = useCallback((draft = {}) => {
-    setComposerDraft({
-      to: '',
-      subject: '',
-      body: '',
-      threadId: null,
-      title: 'New message',
-      ...draft,
-    })
-    setSendError(null)
-    setComposerOpen(true)
-  }, [])
-
-  const handleSendEmail = useCallback(async (to, subject, body) => {
-    setSendingEmail(true)
-    setSendError(null)
-    try {
-      await sendEmail({ to, subject, body, threadId: composerDraft.threadId || undefined })
-      setComposerOpen(false)
-      setComposerDraft({ to: '', subject: '', body: '', threadId: null, title: 'New message' })
-      addToast({ type: 'success', message: 'Email sent' })
-    } catch (err) {
-      setSendError(err.message || 'Failed to send email')
-    } finally {
-      setSendingEmail(false)
-    }
-  }, [composerDraft.threadId, addToast])
-
-  const handleReply = useCallback((email) => {
-    if (!email) return
-    const to = extractEmailAddress(email.sender || email.from_address || '')
-    const subject = prefixSubject(email.subject || '', 'Re: ')
-    const original = email.body_plain || email.body || email.snippet || ''
-    const when = email.date || email.received_at || ''
-    const who = email.sender || email.from_address || 'someone'
-    const body = `\n\nOn ${when}, ${who} wrote:\n${quoteBody(original)}`
-    openComposer({ to, subject, body, threadId: email.thread_id || null, title: 'Reply' })
-  }, [openComposer])
-
-  const handleForward = useCallback((email) => {
-    if (!email) return
-    const subject = prefixSubject(email.subject || '', 'Fwd: ')
-    const toList = Array.isArray(email.to_addresses) ? email.to_addresses : (email.to_addresses ? [email.to_addresses] : [])
-    const forwardedHeader = [
-      '---------- Forwarded message ---------',
-      `From: ${email.sender || email.from_address || ''}`,
-      `Date: ${email.date || email.received_at || ''}`,
-      `Subject: ${email.subject || ''}`,
-      `To: ${toList.join(', ')}`,
-      '',
-    ].join('\n')
-    const body = `\n\n${forwardedHeader}\n${email.body_plain || email.body || email.snippet || ''}`
-    openComposer({ to: '', subject, body, title: 'Forward' })
-  }, [openComposer])
 
   // ── Resize panel drag logic ──
   const startResize = useCallback((e, panel) => {
@@ -398,9 +343,61 @@ function Home() {
     return () => { cancelled = true; clearTimeout(timeoutId) }
   }, [sessionId, refreshTrigger])
 
+  // Fetch label counts for sidebar badges
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    fetchLabelCounts()
+      .then((res) => { if (!cancelled) setLabelCounts(res.counts || {}) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [sessionId, refreshTrigger])
+
+  // Fetch emails when switching to a non-inbox folder
+  const handleFolderChange = useCallback(async (folderId) => {
+    setActiveFolder(folderId)
+    setSelectedEmailId(null)
+    setSelectedEmail(null)
+
+    if (folderId === 'inbox') {
+      setFolderEmails([])
+      return
+    }
+
+    setFolderLoading(true)
+    try {
+      let res
+      if (folderId === 'drafts') {
+        res = await fetchDrafts()
+      } else {
+        // Map folder id to Gmail label (backend also supports ARCHIVE)
+        const labelMap = { sent: 'SENT', starred: 'STARRED', trash: 'TRASH', spam: 'SPAM', archive: 'ARCHIVE' }
+        const label = labelMap[folderId]
+        if (!label) { setFolderLoading(false); return }
+        res = await fetchFolder(label)
+      }
+      const list = (res?.emails ?? []).map((e) => ({
+        ...e,
+        id: e.id || e.gmail_id, // folder emails use gmail_id as id
+        subject: e.subject || '(No Subject)',
+        sender: e.from_address || 'Unknown',
+        date: formatDate(e.received_at || '') || '',
+      }))
+      setFolderEmails(list)
+    } catch (err) {
+      console.error('Folder fetch error:', err)
+      setFolderEmails([])
+    } finally {
+      setFolderLoading(false)
+    }
+  }, [])
+
   const handleEmailClick = useCallback(async (emailOrId) => {
-    const emailId = typeof emailOrId === 'object' ? emailOrId?.id : emailOrId
+    const emailObj = typeof emailOrId === 'object' ? emailOrId : null
+    const emailId = emailObj?.id || emailOrId
     if (!emailId) return
+    const currentList = activeFolder === 'inbox' ? emails : folderEmails
+    const currentEmail = currentList.find((e) => e.id === emailId)
     setSelectedEmailId(emailId)
     setDetailLoading(true)
     setSelectedEmail(null)
@@ -415,13 +412,32 @@ function Home() {
         labels: mapped.label_ids || [],
       }
       setSelectedEmail(displayEmail)
+      if (currentEmail && currentEmail.is_read === false) {
+        try {
+          await toggleReadEmail(emailId)
+          const markRead = (prev) => prev.map((e) => (e.id === emailId ? { ...e, is_read: true } : e))
+          setEmails(markRead)
+          setFolderEmails(markRead)
+          setSelectedEmail((prev) => (prev ? { ...prev, is_read: true } : prev))
+        } catch (_) {}
+      }
     } catch (err) {
-      console.error('Error fetching email:', err)
-      setSelectedEmail(null)
+      if (emailObj) {
+        setSelectedEmail({
+          ...emailObj,
+          sender: emailObj.from_address || emailObj.sender || 'Unknown',
+          date: emailObj.date || formatDate(emailObj.received_at) || '',
+          body: emailObj.snippet || '(Email body not available — this email is not in your inbox cache)',
+          labels: emailObj.label_ids || [],
+        })
+      } else {
+        console.error('Error fetching email:', err)
+        setSelectedEmail(null)
+      }
     } finally {
       setDetailLoading(false)
     }
-  }, [])
+  }, [activeFolder, emails, folderEmails, toggleReadEmail])
 
   const handleSync = useCallback(async () => {
     setSyncing(true)
@@ -483,6 +499,145 @@ function Home() {
     }
   }, [deletingGroup, addToast])
 
+  // ---------- Email actions ----------
+
+  const handleSendEmail = useCallback(async ({ to, cc, bcc, subject, body }) => {
+    await sendNewEmail({ to, cc, bcc, subject, body })
+    addToast({ type: 'success', message: `Email sent to ${to}` })
+    setComposeOpen(false)
+    setComposeInitial({})
+  }, [addToast])
+
+  const handleReplyEmail = useCallback(async (emailId, { body, cc, bcc }) => {
+    await replyToEmail(emailId, { body, cc, bcc })
+    addToast({ type: 'success', message: 'Reply sent' })
+  }, [addToast])
+
+  const handleForwardEmail = useCallback((email) => {
+    if (!email) return
+    const subject = prefixSubject(email.subject || '', 'Fwd: ')
+    const toList = Array.isArray(email.to_addresses) ? email.to_addresses : (email.to_addresses ? [email.to_addresses] : [])
+    const forwardedHeader = [
+      '---------- Forwarded message ---------',
+      `From: ${email.sender || email.from_address || ''}`,
+      `Date: ${email.date || email.received_at || ''}`,
+      `Subject: ${email.subject || ''}`,
+      `To: ${toList.join(', ')}`,
+      '',
+    ].join('\n')
+    const body = `\n\n${forwardedHeader}\n${email.body_plain || email.body || email.snippet || ''}`
+    setComposeInitial({ to: '', subject, body })
+    setComposeOpen(true)
+  }, [])
+
+  const handleDeleteEmail = useCallback(async (emailId) => {
+    try {
+      await deleteEmail(emailId)
+      setEmails((prev) => prev.filter((e) => e.id !== emailId))
+      if (selectedEmailId === emailId) {
+        setSelectedEmailId(null)
+        setSelectedEmail(null)
+      }
+      addToast({ type: 'success', message: 'Email deleted' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to delete' })
+    }
+  }, [selectedEmailId, addToast])
+
+  const handleArchiveEmail = useCallback(async (emailId) => {
+    try {
+      await archiveEmail(emailId)
+      setEmails((prev) => prev.filter((e) => e.id !== emailId))
+      if (selectedEmailId === emailId) {
+        setSelectedEmailId(null)
+        setSelectedEmail(null)
+      }
+      addToast({ type: 'success', message: 'Email archived' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to archive' })
+    }
+  }, [selectedEmailId, addToast])
+
+  const handleStarEmail = useCallback(async (emailId) => {
+    try {
+      const result = await starEmail(emailId)
+      setEmails((prev) => prev.map((e) => e.id === emailId ? { ...e, is_starred: result.is_starred } : e))
+      if (selectedEmail?.id === emailId) {
+        setSelectedEmail((prev) => prev ? { ...prev, is_starred: result.is_starred } : prev)
+      }
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to star' })
+    }
+  }, [selectedEmail, addToast])
+
+  const handleToggleRead = useCallback(async (emailId) => {
+    try {
+      const result = await toggleReadEmail(emailId)
+      const updater = (prev) => prev.map((e) => (e.id === emailId ? { ...e, is_read: result.is_read } : e))
+      setEmails(updater)
+      setFolderEmails(updater)
+      if (selectedEmail?.id === emailId) {
+        setSelectedEmail((prev) => (prev ? { ...prev, is_read: result.is_read } : prev))
+      }
+      addToast({ type: 'success', message: result.is_read ? 'Marked as read' : 'Marked as unread' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to update read status' })
+    }
+  }, [selectedEmail?.id, addToast])
+
+  const handlePinGroup = useCallback(async (group) => {
+    if (!group || group.id === '__all__' || group.id === '__unsorted__') return
+    try {
+      await updateGroup(group.id, { is_pinned: !group.is_pinned })
+      const groups = await fetchGroups()
+      setUserGroups(groups)
+      addToast({ type: 'success', message: group.is_pinned ? 'Group unpinned' : 'Group pinned' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to update group' })
+    }
+  }, [addToast])
+
+  const handlePinEmail = useCallback(async (emailOrId) => {
+    const emailId = typeof emailOrId === 'object' ? emailOrId?.id : emailOrId
+    if (!emailId) return
+    try {
+      const result = await pinEmail(emailId)
+      const updater = (prev) => prev.map((e) =>
+        e.id === emailId ? { ...e, is_pinned: result.is_pinned, pinned_at: result.is_pinned ? new Date().toISOString() : null } : e
+      )
+      setEmails(updater)
+      setFolderEmails(updater)
+      if (selectedEmail?.id === emailId) {
+        setSelectedEmail((prev) => (prev ? { ...prev, is_pinned: result.is_pinned } : prev))
+      }
+      addToast({ type: 'success', message: result.is_pinned ? 'Email pinned' : 'Email unpinned' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to update pin' })
+    }
+  }, [selectedEmail?.id, addToast])
+
+  const handleComposeFromChat = useCallback(({ to, subject, body }) => {
+    setComposeInitial({ to, subject, body })
+    setComposeOpen(true)
+  }, [])
+
+  // View mode change: when not in Inbox, switching to Tabs/Grouped also switches folder to Inbox
+  const handleViewModeChange = useCallback((mode) => {
+    setViewMode(mode)
+    if (activeFolder !== 'inbox') {
+      setActiveFolder('inbox')
+      setFolderEmails([])
+    }
+  }, [activeFolder])
+
+  // Clicking a group: go to Inbox, Tabs view, and select that group's tab
+  const handleGroupClick = useCallback((group) => {
+    setActiveFolder('inbox')
+    setFolderEmails([])
+    setViewMode('tabs')
+    setActiveTab(group.id)
+  }, [])
+
   // ---------- Filtered / sorted emails ----------
 
   const filteredEmails = useMemo(() => {
@@ -527,15 +682,20 @@ function Home() {
   }, [sortedEmails, userGroups])
 
   const displayedEmails = useMemo(() => {
+    let list
     if (viewMode === 'grouped') return sortedEmails
-    // Tab view: filter by selected group tab
-    if (activeTab === '__all__') return sortedEmails
-    if (activeTab === '__unsorted__') {
-      return sortedEmails.filter((e) => !userGroups.some((g) => matchEmailToGroup(e, g)))
+    if (activeTab === '__all__') list = sortedEmails
+    else if (activeTab === '__unsorted__') list = sortedEmails.filter((e) => !userGroups.some((g) => matchEmailToGroup(e, g)))
+    else {
+      const group = userGroups.find((g) => g.id === activeTab)
+      list = group ? sortedEmails.filter((e) => matchEmailToGroup(e, group)) : sortedEmails
     }
-    const group = userGroups.find((g) => g.id === activeTab)
-    if (group) return sortedEmails.filter((e) => matchEmailToGroup(e, group))
-    return sortedEmails
+    return [...list].sort((a, b) => {
+      if (a.is_pinned && !b.is_pinned) return -1
+      if (!a.is_pinned && b.is_pinned) return 1
+      if (a.is_pinned && b.is_pinned) return new Date(b.pinned_at || 0) - new Date(a.pinned_at || 0)
+      return (new Date(b.received_at || 0) - new Date(a.received_at || 0))
+    })
   }, [sortedEmails, viewMode, activeTab, userGroups])
 
   const categoryTabsWithCounts = useMemo(
@@ -618,7 +778,7 @@ function Home() {
     : null
 
   // Build CSS class for dashboard
-  const isGroupedView = viewMode === 'grouped'
+  const isGroupedView = viewMode === 'grouped' && activeFolder === 'inbox'
   const dashClasses = [
     'dashboard dashboard--gmail',
     chatOpen ? 'dashboard--chat-open' : '',
@@ -638,7 +798,6 @@ function Home() {
       searchQuery={searchQuery}
       onSearchChange={setSearchQuery}
       onRunSort={handleSync}
-      onCompose={() => openComposer()}
       user={user}
       onLogout={handleLogout}
       syncing={syncing}
@@ -673,28 +832,44 @@ function Home() {
             emailCount={sortedEmails.length}
             totalCount={emails.length}
             viewMode={viewMode}
-            onViewModeChange={setViewMode}
+            onViewModeChange={handleViewModeChange}
             userGroups={userGroups}
             onDeleteGroup={handleDeleteGroup}
             onEditGroup={handleEditGroup}
+            onGroupClick={handleGroupClick}
+            activeFolder={activeFolder}
+            onFolderChange={handleFolderChange}
+            labelCounts={labelCounts}
           />
         </div>
         <div className="dashboard__list-area">
-          <SortControls
-            sortRange={sortRange}
-            onSortRangeChange={setSortRange}
-            emailCount={sortedEmails.length}
-            totalCount={emails.length}
-          />
-          {viewMode === 'tabs' && (
+          {activeFolder === 'inbox' && (
+            <SortControls
+              sortRange={sortRange}
+              onSortRangeChange={setSortRange}
+              emailCount={sortedEmails.length}
+              totalCount={emails.length}
+            />
+          )}
+          {activeFolder === 'inbox' && viewMode === 'tabs' && (
             <CategoryTabs
               tabs={categoryTabsWithCounts}
               activeTab={activeTab}
               onTabChange={setActiveTab}
             />
           )}
+          {activeFolder !== 'inbox' && (
+            <div className="folder-header">
+              <h2 className="folder-header__title">
+                {activeFolder.charAt(0).toUpperCase() + activeFolder.slice(1)}
+              </h2>
+              <span className="folder-header__count">
+                {folderEmails.length} email{folderEmails.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+          )}
           <div className="dashboard__list-scroll">
-            {loading ? (
+            {(activeFolder === 'inbox' ? loading : folderLoading) ? (
               <div className="loading-state">
                 <div className="skeleton-card" />
                 <div className="skeleton-card" />
@@ -702,6 +877,23 @@ function Home() {
                 <div className="skeleton-card" />
                 <div className="skeleton-card" />
               </div>
+            ) : activeFolder !== 'inbox' ? (
+              /* Non-inbox folder: show folder emails */
+              folderEmails.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state__icon">&#128233;</div>
+                  <p className="empty-state__title">No emails in {activeFolder}</p>
+                  <p className="empty-state__hint">This folder is empty</p>
+                </div>
+              ) : (
+                <EmailList
+                  emails={folderEmails}
+                  selectedEmailId={selectedEmailId}
+                  onSelectEmail={handleEmailClick}
+                  onPinEmail={handlePinEmail}
+                  showKeywordChips={false}
+                />
+              )
             ) : displayedEmails.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-state__icon">&#128233;</div>
@@ -725,14 +917,17 @@ function Home() {
                 userGroups={userGroups}
                 selectedEmailId={selectedEmailId}
                 onSelectEmail={handleEmailClick}
+                onPinEmail={handlePinEmail}
                 onEditGroup={handleEditGroup}
                 onDeleteGroup={handleDeleteGroup}
+                onPinGroup={handlePinGroup}
               />
             ) : (
               <EmailList
                 emails={displayedEmails}
                 selectedEmailId={selectedEmailId}
                 onSelectEmail={handleEmailClick}
+                onPinEmail={handlePinEmail}
                 showKeywordChips={false}
               />
             )}
@@ -758,8 +953,12 @@ function Home() {
                 setSelectedEmailId(null)
                 setSelectedEmail(null)
               }}
-              onReply={handleReply}
-              onForward={handleForward}
+              onDelete={handleDeleteEmail}
+              onArchive={handleArchiveEmail}
+              onStar={handleStarEmail}
+              onReply={handleReplyEmail}
+              onForward={handleForwardEmail}
+              onToggleRead={handleToggleRead}
             />
           ) : !isGroupedView ? (
             <div className="email-detail-empty">
@@ -782,6 +981,7 @@ function Home() {
             }}
             onToast={addToast}
             onSelectEmail={handleEmailClick}
+            onCompose={handleComposeFromChat}
           />
         </div>
 
@@ -825,17 +1025,26 @@ function Home() {
         )}
       </div>
 
-      {/* Compose modal */}
-      {composerOpen && (
-        <EmailComposer
-          initialTo={composerDraft.to}
-          initialSubject={composerDraft.subject}
-          initialBody={composerDraft.body}
+      {/* Compose email FAB */}
+      <button
+        type="button"
+        className="compose-fab"
+        onClick={() => { setComposeInitial({}); setComposeOpen(true) }}
+        title="Compose new email"
+        aria-label="Compose new email"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 000-1.42l-2.34-2.34a1.003 1.003 0 00-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>
+        <span className="compose-fab__text">Compose</span>
+      </button>
+
+      {/* Compose email modal */}
+      {composeOpen && (
+        <ComposeModal
           onSend={handleSendEmail}
-          onCancel={() => setComposerOpen(false)}
-          sending={sendingEmail}
-          title={composerDraft.title}
-          sendError={sendError}
+          onClose={() => { setComposeOpen(false); setComposeInitial({}) }}
+          initialTo={composeInitial.to}
+          initialSubject={composeInitial.subject}
+          initialBody={composeInitial.body}
         />
       )}
 
