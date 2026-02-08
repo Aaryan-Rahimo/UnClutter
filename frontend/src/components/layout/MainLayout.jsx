@@ -6,6 +6,7 @@ function MainLayout({
   searchQuery = '',
   onSearchChange,
   onRunSort,
+  onCompose,
   user = null,
   onLogout,
   syncing = false,
@@ -21,6 +22,7 @@ function MainLayout({
         searchQuery={searchQuery}
         onSearchChange={onSearchChange}
         onRunSort={onRunSort}
+        onCompose={onCompose}
         user={user}
         onLogout={onLogout}
         syncing={syncing}

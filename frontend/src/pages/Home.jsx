@@ -6,6 +6,7 @@ import EmailList from '../components/layout/EmailList'
 import GroupedEmailList from '../components/layout/GroupedEmailList'
 import SortControls from '../components/layout/SortControls'
 import EmailDetail from '../components/email/EmailDetail'
+import EmailComposer from '../components/email/EmailComposer'
 import ChatbotSidebar from '../components/layout/ChatbotSidebar'
 import Toast from '../components/layout/Toast'
 import GroupEditModal from '../components/layout/GroupEditModal'
@@ -17,6 +18,7 @@ import {
   fetchEmail,
   mapEmailFromBackend,
   categorizeEmail,
+  sendEmail,
 } from '../utils/gmailApi'
 import { fetchGroups, updateGroup, deleteGroup } from '../utils/groupsApi'
 import '../styles/home.css'
@@ -81,6 +83,26 @@ const MIN_CENTER_W = 300
 
 function clamp(val, min, max) { return Math.max(min, Math.min(max, val)) }
 
+function extractEmailAddress(value) {
+  if (!value) return ''
+  const match = value.match(/<([^>]+)>/)
+  return (match ? match[1] : value).trim()
+}
+
+function prefixSubject(subject, prefix) {
+  const clean = (subject || '').trim()
+  if (!clean) return prefix.trim()
+  if (clean.toLowerCase().startsWith(prefix.toLowerCase())) return clean
+  return `${prefix}${clean}`
+}
+
+function quoteBody(text) {
+  return (text || '')
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n')
+}
+
 function Home() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedEmailId, setSelectedEmailId] = useState(null)
@@ -103,6 +125,18 @@ function Home() {
 
   // Toast state
   const [toasts, setToasts] = useState([])
+
+  // Composer state
+  const [composerOpen, setComposerOpen] = useState(false)
+  const [composerDraft, setComposerDraft] = useState({
+    to: '',
+    subject: '',
+    body: '',
+    threadId: null,
+    title: 'New message',
+  })
+  const [sendingEmail, setSendingEmail] = useState(false)
+  const [sendError, setSendError] = useState(null)
 
   // Group edit modal
   const [editingGroup, setEditingGroup] = useState(null)
@@ -133,6 +167,61 @@ function Home() {
   const dismissToast = useCallback((id) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
   }, [])
+
+  const openComposer = useCallback((draft = {}) => {
+    setComposerDraft({
+      to: '',
+      subject: '',
+      body: '',
+      threadId: null,
+      title: 'New message',
+      ...draft,
+    })
+    setSendError(null)
+    setComposerOpen(true)
+  }, [])
+
+  const handleSendEmail = useCallback(async (to, subject, body) => {
+    setSendingEmail(true)
+    setSendError(null)
+    try {
+      await sendEmail({ to, subject, body, threadId: composerDraft.threadId || undefined })
+      setComposerOpen(false)
+      setComposerDraft({ to: '', subject: '', body: '', threadId: null, title: 'New message' })
+      addToast({ type: 'success', message: 'Email sent' })
+    } catch (err) {
+      setSendError(err.message || 'Failed to send email')
+    } finally {
+      setSendingEmail(false)
+    }
+  }, [composerDraft.threadId, addToast])
+
+  const handleReply = useCallback((email) => {
+    if (!email) return
+    const to = extractEmailAddress(email.sender || email.from_address || '')
+    const subject = prefixSubject(email.subject || '', 'Re: ')
+    const original = email.body_plain || email.body || email.snippet || ''
+    const when = email.date || email.received_at || ''
+    const who = email.sender || email.from_address || 'someone'
+    const body = `\n\nOn ${when}, ${who} wrote:\n${quoteBody(original)}`
+    openComposer({ to, subject, body, threadId: email.thread_id || null, title: 'Reply' })
+  }, [openComposer])
+
+  const handleForward = useCallback((email) => {
+    if (!email) return
+    const subject = prefixSubject(email.subject || '', 'Fwd: ')
+    const toList = Array.isArray(email.to_addresses) ? email.to_addresses : (email.to_addresses ? [email.to_addresses] : [])
+    const forwardedHeader = [
+      '---------- Forwarded message ---------',
+      `From: ${email.sender || email.from_address || ''}`,
+      `Date: ${email.date || email.received_at || ''}`,
+      `Subject: ${email.subject || ''}`,
+      `To: ${toList.join(', ')}`,
+      '',
+    ].join('\n')
+    const body = `\n\n${forwardedHeader}\n${email.body_plain || email.body || email.snippet || ''}`
+    openComposer({ to: '', subject, body, title: 'Forward' })
+  }, [openComposer])
 
   // ── Resize panel drag logic ──
   const startResize = useCallback((e, panel) => {
@@ -549,6 +638,7 @@ function Home() {
       searchQuery={searchQuery}
       onSearchChange={setSearchQuery}
       onRunSort={handleSync}
+      onCompose={() => openComposer()}
       user={user}
       onLogout={handleLogout}
       syncing={syncing}
@@ -668,6 +758,8 @@ function Home() {
                 setSelectedEmailId(null)
                 setSelectedEmail(null)
               }}
+              onReply={handleReply}
+              onForward={handleForward}
             />
           ) : !isGroupedView ? (
             <div className="email-detail-empty">
@@ -732,6 +824,20 @@ function Home() {
           />
         )}
       </div>
+
+      {/* Compose modal */}
+      {composerOpen && (
+        <EmailComposer
+          initialTo={composerDraft.to}
+          initialSubject={composerDraft.subject}
+          initialBody={composerDraft.body}
+          onSend={handleSendEmail}
+          onCancel={() => setComposerOpen(false)}
+          sending={sendingEmail}
+          title={composerDraft.title}
+          sendError={sendError}
+        />
+      )}
 
       {/* Toast notifications */}
       <Toast toasts={toasts} onDismiss={dismissToast} />

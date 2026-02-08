@@ -249,6 +249,35 @@ export function getGmailClient(accessToken) {
   return oauth2;
 }
 
+export function buildRawEmail({ from, to, cc, subject, body, inReplyTo, references }) {
+  const toList = Array.isArray(to) ? to : (to ? [to] : []);
+  const ccList = Array.isArray(cc) ? cc : (cc ? [cc] : []);
+  const lines = [];
+  if (from) lines.push(`From: ${from}`);
+  if (toList.length) lines.push(`To: ${toList.join(', ')}`);
+  if (ccList.length) lines.push(`Cc: ${ccList.join(', ')}`);
+  if (inReplyTo) lines.push(`In-Reply-To: ${inReplyTo}`);
+  if (references) {
+    const refs = Array.isArray(references) ? references.join(' ') : references;
+    if (refs) lines.push(`References: ${refs}`);
+  }
+  lines.push(`Subject: ${subject || ''}`);
+  lines.push('Content-Type: text/plain; charset="UTF-8"');
+  lines.push('Content-Transfer-Encoding: 7bit');
+  lines.push('');
+  lines.push(body || '');
+  const message = lines.join('\r\n');
+  return Buffer.from(message).toString('base64url');
+}
+
+export async function sendMessage(accessToken, raw, threadId) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+  const requestBody = threadId ? { raw, threadId } : { raw };
+  const res = await gmail.users.messages.send({ userId: 'me', requestBody });
+  return res.data;
+}
+
 export async function fetchLatestEmails(accessToken, maxResults = GMAIL_LIST_MAX) {
   const auth = getGmailClient(accessToken);
   const gmail = google.gmail({ version: 'v1', auth });

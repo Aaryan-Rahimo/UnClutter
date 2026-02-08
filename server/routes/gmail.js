@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../config.js';
-import { fetchLatestEmails } from '../lib/gmail.js';
+import { fetchLatestEmails, buildRawEmail, sendMessage } from '../lib/gmail.js';
 import { getAccountBySession } from '../lib/session.js';
 
 export const gmailRouter = Router();
@@ -162,4 +162,39 @@ gmailRouter.get('/email/:id', async (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
   res.json(data);
+});
+
+gmailRouter.post('/send', async (req, res) => {
+  const { account } = req;
+  const data = req.body || {};
+  const toAddr = typeof data.to === 'string' ? data.to.trim() : '';
+  const subject = typeof data.subject === 'string' ? data.subject.trim() : '';
+  const body = typeof data.body === 'string' ? data.body : '';
+  const threadId = typeof data.threadId === 'string' ? data.threadId : null;
+
+  if (!toAddr) {
+    return res.status(400).json({ error: 'To is required' });
+  }
+  if (!subject) {
+    return res.status(400).json({ error: 'Subject is required' });
+  }
+
+  const { data: user } = await supabase
+    .from('users')
+    .select('email')
+    .eq('id', account.userId)
+    .single();
+
+  if (!user?.email) {
+    return res.status(400).json({ error: 'User email not found' });
+  }
+
+  try {
+    const raw = buildRawEmail({ from: user.email, to: toAddr, subject, body });
+    const sent = await sendMessage(account.access_token, raw, threadId);
+    res.json({ id: sent.id, threadId: sent.threadId });
+  } catch (err) {
+    console.error('Send email failed:', err);
+    res.status(500).json({ error: 'Send failed' });
+  }
 });

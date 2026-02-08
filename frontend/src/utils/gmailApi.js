@@ -65,6 +65,14 @@ export async function categorizeEmail(emailId) {
   })
 }
 
+export async function sendEmail({ to, subject, body, threadId } = {}) {
+  return fetchWithAuth('/gmail/send', {
+    method: 'POST',
+    body: JSON.stringify({ to, subject, body, threadId }),
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 /** Map backend email shape to frontend shape. Handles both list and detail responses. */
 export function mapEmailFromBackend(email) {
   if (!email) return null

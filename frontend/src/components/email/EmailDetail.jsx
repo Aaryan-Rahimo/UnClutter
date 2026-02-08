@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { getAuthHeaders } from '../../utils/auth'
+import { API_BASE, getAuthHeaders } from '../../utils/auth'
 import { getDisplayBody, splitIntoParagraphs } from '../../utils/emailDisplay'
 
 const TRUNCATE_LIMIT = 3000
@@ -39,7 +39,7 @@ function buildIframeSrcdoc(html) {
 </script></body></html>`
 }
 
-function EmailDetail({ email, onBack }) {
+function EmailDetail({ email, onBack, onReply, onForward }) {
   const [summary, setSummary] = useState(null)
   const [summaryError, setSummaryError] = useState(null)
   const [summarizing, setSummarizing] = useState(false)
@@ -74,9 +74,9 @@ function EmailDetail({ email, onBack }) {
     setSummaryError(null)
     setSummarizing(true)
     try {
-      const res = await fetch('/api/ai/summarize-email', {
+      const res = await fetch(`${API_BASE || ''}/api/ai/summarize-email`, {
         method: 'POST',
-        headers: getAuthHeaders(),
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ subject: email.subject, body: bodyText }),
       })
       if (!res.ok) {
@@ -138,8 +138,12 @@ function EmailDetail({ email, onBack }) {
           Back
         </button>
         <span className="email-detail__toolbar-divider" />
-        <button type="button" className="email-detail__action">Reply</button>
-        <button type="button" className="email-detail__action">Forward</button>
+        <button type="button" className="email-detail__action" onClick={() => onReply?.(email)}>
+          Reply
+        </button>
+        <button type="button" className="email-detail__action" onClick={() => onForward?.(email)}>
+          Forward
+        </button>
         <div style={{flex: 1}} />
         {hasHtml && (
           <button
