@@ -249,6 +249,236 @@ export function getGmailClient(accessToken) {
   return oauth2;
 }
 
+/* ---------- Lightweight fetch by label (for Sent, Trash, Spam, etc.) ---------- */
+
+export async function fetchEmailsByLabel(accessToken, labelId, maxResults = 30) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  const list = await gmail.users.messages.list({
+    userId: 'me',
+    labelIds: [labelId],
+    maxResults,
+  });
+
+  const messages = list.data.messages || [];
+  const out = [];
+
+  for (const msg of messages) {
+    try {
+      const full = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'metadata', metadataHeaders: ['Subject', 'From', 'To', 'Date'] });
+      const headers = full.data.payload?.headers || [];
+      const getHeader = (name) => headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
+
+      const dateStr = getHeader('Date');
+      const labelIds = full.data.labelIds || [];
+
+      out.push({
+        gmail_id: msg.id,
+        thread_id: full.data.threadId || msg.id,
+        subject: getHeader('Subject') || '(No Subject)',
+        snippet: full.data.snippet || '',
+        from_address: getHeader('From'),
+        to_addresses: (getHeader('To') || '').split(',').map((s) => s.trim()).filter(Boolean),
+        received_at: dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(),
+        is_read: !labelIds.includes('UNREAD'),
+        is_starred: labelIds.includes('STARRED'),
+        label_ids: labelIds,
+      });
+    } catch (err) {
+      console.error('[gmail] Error fetching message', msg.id, err.message);
+    }
+  }
+
+  return out;
+}
+
+/* ---------- Fetch emails by search query (e.g. archived = not in inbox) ---------- */
+
+export async function fetchEmailsByQuery(accessToken, q, maxResults = 30) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  const list = await gmail.users.messages.list({
+    userId: 'me',
+    q,
+    maxResults,
+  });
+
+  const messages = list.data.messages || [];
+  const out = [];
+
+  for (const msg of messages) {
+    try {
+      const full = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'metadata', metadataHeaders: ['Subject', 'From', 'To', 'Date'] });
+      const headers = full.data.payload?.headers || [];
+      const getHeader = (name) => headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
+
+      const dateStr = getHeader('Date');
+      const labelIds = full.data.labelIds || [];
+
+      out.push({
+        gmail_id: msg.id,
+        thread_id: full.data.threadId || msg.id,
+        subject: getHeader('Subject') || '(No Subject)',
+        snippet: full.data.snippet || '',
+        from_address: getHeader('From'),
+        to_addresses: (getHeader('To') || '').split(',').map((s) => s.trim()).filter(Boolean),
+        received_at: dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(),
+        is_read: !labelIds.includes('UNREAD'),
+        is_starred: labelIds.includes('STARRED'),
+        label_ids: labelIds,
+      });
+    } catch (err) {
+      console.error('[gmail] Error fetching message', msg.id, err.message);
+    }
+  }
+
+  return out;
+}
+
+/* ---------- Fetch drafts ---------- */
+
+export async function fetchDrafts(accessToken, maxResults = 20) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  const list = await gmail.users.drafts.list({ userId: 'me', maxResults });
+  const drafts = list.data.drafts || [];
+  const out = [];
+
+  for (const draft of drafts) {
+    try {
+      const full = await gmail.users.drafts.get({ userId: 'me', id: draft.id, format: 'metadata' });
+      const msg = full.data.message;
+      const headers = msg?.payload?.headers || [];
+      const getHeader = (name) => headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
+
+      const dateStr = getHeader('Date');
+
+      out.push({
+        draft_id: draft.id,
+        gmail_id: msg?.id || draft.id,
+        thread_id: msg?.threadId || '',
+        subject: getHeader('Subject') || '(No Subject)',
+        snippet: msg?.snippet || '',
+        from_address: getHeader('From'),
+        to_addresses: (getHeader('To') || '').split(',').map((s) => s.trim()).filter(Boolean),
+        received_at: dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(),
+        is_read: true,
+        is_starred: false,
+        label_ids: ['DRAFT'],
+      });
+    } catch (err) {
+      console.error('[gmail] Error fetching draft', draft.id, err.message);
+    }
+  }
+
+  return out;
+}
+
+/* ---------- Fetch label counts ---------- */
+
+export async function fetchLabelCounts(accessToken) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  const labels = ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'STARRED', 'SPAM'];
+  const counts = {};
+
+  for (const label of labels) {
+    try {
+      const res = await gmail.users.labels.get({ userId: 'me', id: label });
+      counts[label] = {
+        total: res.data.messagesTotal || 0,
+        unread: res.data.messagesUnread || 0,
+      };
+    } catch {
+      counts[label] = { total: 0, unread: 0 };
+    }
+  }
+
+  return counts;
+}
+
+/* ---------- Build RFC 2822 MIME message ---------- */
+
+function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references }) {
+  const lines = [];
+  lines.push(`To: ${to}`);
+  if (cc) lines.push(`Cc: ${cc}`);
+  if (bcc) lines.push(`Bcc: ${bcc}`);
+  lines.push(`Subject: ${subject}`);
+  lines.push('MIME-Version: 1.0');
+  lines.push('Content-Type: text/plain; charset="UTF-8"');
+  if (inReplyTo) lines.push(`In-Reply-To: ${inReplyTo}`);
+  if (references) lines.push(`References: ${references}`);
+  lines.push('');
+  lines.push(body);
+  const raw = lines.join('\r\n');
+  return Buffer.from(raw).toString('base64url');
+}
+
+/* ---------- Send email ---------- */
+
+export async function sendEmail(accessToken, { to, cc, bcc, subject, body, threadId, inReplyTo, references }) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+  const raw = buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references });
+  const params = { userId: 'me', requestBody: { raw } };
+  if (threadId) params.requestBody.threadId = threadId;
+  const result = await gmail.users.messages.send(params);
+  return result.data;
+}
+
+/* ---------- Trash email ---------- */
+
+export async function trashEmail(accessToken, gmailId) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+  await gmail.users.messages.trash({ userId: 'me', id: gmailId });
+}
+
+/* ---------- Archive email (remove INBOX label) ---------- */
+
+export async function archiveEmail(accessToken, gmailId) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+  await gmail.users.messages.modify({
+    userId: 'me',
+    id: gmailId,
+    requestBody: { removeLabelIds: ['INBOX'] },
+  });
+}
+
+/* ---------- Toggle star ---------- */
+
+export async function toggleStarEmail(accessToken, gmailId, starred) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+  await gmail.users.messages.modify({
+    userId: 'me',
+    id: gmailId,
+    requestBody: starred
+      ? { addLabelIds: ['STARRED'] }
+      : { removeLabelIds: ['STARRED'] },
+  });
+}
+
+/* ---------- Toggle read/unread ---------- */
+
+export async function toggleReadEmail(accessToken, gmailId, read) {
+  const auth = getGmailClient(accessToken);
+  const gmail = google.gmail({ version: 'v1', auth });
+  await gmail.users.messages.modify({
+    userId: 'me',
+    id: gmailId,
+    requestBody: read
+      ? { removeLabelIds: ['UNREAD'] }
+      : { addLabelIds: ['UNREAD'] },
+  });
+}
+
 export async function fetchLatestEmails(accessToken, maxResults = GMAIL_LIST_MAX) {
   const auth = getGmailClient(accessToken);
   const gmail = google.gmail({ version: 'v1', auth });

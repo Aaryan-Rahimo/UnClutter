@@ -65,6 +65,54 @@ export async function categorizeEmail(emailId) {
   })
 }
 
+/* ── Folder / label queries ── */
+
+export async function fetchFolder(label) {
+  return fetchWithAuth(`/gmail/folder/${label}`)
+}
+
+export async function fetchDrafts() {
+  return fetchWithAuth('/gmail/drafts')
+}
+
+export async function fetchLabelCounts() {
+  return fetchWithAuth('/gmail/label-counts')
+}
+
+/* ── Email actions ── */
+
+export async function sendNewEmail({ to, cc, bcc, subject, body }) {
+  return fetchWithAuth('/gmail/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to, cc, bcc, subject, body }),
+  })
+}
+
+export async function replyToEmail(emailId, { body, cc, bcc }) {
+  return fetchWithAuth(`/gmail/reply/${emailId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body, cc, bcc }),
+  })
+}
+
+export async function deleteEmail(emailId) {
+  return fetchWithAuth(`/gmail/email/${emailId}`, { method: 'DELETE' })
+}
+
+export async function archiveEmail(emailId) {
+  return fetchWithAuth(`/gmail/email/${emailId}/archive`, { method: 'POST' })
+}
+
+export async function starEmail(emailId) {
+  return fetchWithAuth(`/gmail/email/${emailId}/star`, { method: 'POST' })
+}
+
+export async function toggleReadEmail(emailId) {
+  return fetchWithAuth(`/gmail/email/${emailId}/read`, { method: 'POST' })
+}
+
 /** Map backend email shape to frontend shape. Handles both list and detail responses. */
 export function mapEmailFromBackend(email) {
   if (!email) return null

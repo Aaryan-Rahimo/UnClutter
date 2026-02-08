@@ -14,12 +14,12 @@ const DEFAULT_PROMPTS = [
   'What deadlines do I have this week?',
   'Summarize my inbox',
   'Create a group for university emails',
-  'List my action items from recent emails',
+  'Draft an email to my professor',
 ]
 
 const EMAIL_PROMPTS = [
   'Summarize this email',
-  'What should I reply?',
+  'Draft a reply to this email',
   'Is this urgent?',
   'Extract action items',
 ]
@@ -114,7 +114,20 @@ function renderMessageWithEmailLinks(text, emails, onSelectEmail) {
   })
 }
 
-function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], onGroupsChange, onToast, onSelectEmail }) {
+/**
+ * Detect if user is asking to draft/compose/write/send an email.
+ */
+function isComposeIntent(text) {
+  const lower = text.toLowerCase().trim()
+  if (/^(draft|write|compose|send|email|message)\s+(a\s+)?(new\s+)?(email|message|reply)/i.test(lower)) return true
+  if (/^(help me|can you)\s+(draft|write|compose|send)\s/i.test(lower)) return true
+  if (/\b(draft|write|compose)\s+(a\s+)?(an?\s+)?(email|message|reply)\b/i.test(lower)) return true
+  if (/^reply to\s+(this|that|the)\s+(email|message)/i.test(lower)) return true
+  if (/^send\s+(a\s+)?(an?\s+)?(email|message)\s+to\b/i.test(lower)) return true
+  return false
+}
+
+function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], onGroupsChange, onToast, onSelectEmail, onCompose }) {
   const [messages, setMessages] = useState(INITIAL_MESSAGES)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -207,15 +220,24 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
         return
       }
 
-      // ── Regular chat: backend may also return group_created action ──
+      // ── Compose/draft intent — ask AI to draft, then offer compose button ──
+      const composeDetected = isComposeIntent(trimmed)
+
+      // ── Regular chat (or compose-intent routed through AI) ──
       setMessages((prev) => [...prev, userMsg])
       setLoading(true)
 
       try {
         const history = messages.map(({ role, text: t }) => ({ role, text: t }))
+
+        // If compose intent, add a system hint so AI returns a structured draft
+        const messageToSend = composeDetected
+          ? trimmed + '\n\n[SYSTEM: Please draft the email. Format your response with "To:", "Subject:", and then the email body clearly separated. Keep it professional and concise.]'
+          : trimmed
+
         const body = {
           messages: history,
-          message: trimmed,
+          message: messageToSend,
           selectedEmail: selectedEmail || undefined,
           emails: (emails || []).slice(0, 25),
         }
@@ -231,7 +253,40 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
         const data = await res.json()
         console.log('[ChatbotSidebar] Chat response:', data)
 
-        setMessages((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', text: data.text || '' }])
+        const aiText = data.text || ''
+        const msgId = Date.now() + 1
+
+        // For compose intents, try to extract draft fields and tag the message
+        if (composeDetected && onCompose) {
+          const toMatch = aiText.match(/(?:^|\n)\s*To:\s*(.+)/i)
+          const subjectMatch = aiText.match(/(?:^|\n)\s*Subject:\s*(.+)/i)
+          // Extract the body: everything after the last header line
+          let draftBody = aiText
+          const lastHeader = Math.max(
+            aiText.search(/(?:^|\n)\s*Subject:\s*.+/i),
+            aiText.search(/(?:^|\n)\s*To:\s*.+/i),
+          )
+          if (lastHeader >= 0) {
+            const afterHeader = aiText.indexOf('\n', lastHeader + 1)
+            if (afterHeader >= 0) draftBody = aiText.slice(afterHeader + 1).trim()
+          }
+
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: msgId,
+              role: 'assistant',
+              text: aiText,
+              draft: {
+                to: toMatch?.[1]?.trim() || '',
+                subject: subjectMatch?.[1]?.trim() || '',
+                body: draftBody,
+              },
+            },
+          ])
+        } else {
+          setMessages((prev) => [...prev, { id: msgId, role: 'assistant', text: aiText }])
+        }
 
         // If backend detected a group creation action, refresh groups
         if (data.action === 'group_created' && data.group) {
@@ -330,6 +385,19 @@ function ChatbotSidebar({ isOpen = true, onClose, selectedEmail, emails = [], on
             {msg.role === 'assistant'
               ? renderMessageWithEmailLinks(msg.text, emails, onSelectEmail)
               : msg.text}
+            {/* Show "Open in Compose" button for AI-drafted emails */}
+            {msg.draft && onCompose && (
+              <button
+                type="button"
+                className="chatbot-sidebar__compose-btn"
+                onClick={() => onCompose(msg.draft)}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style={{marginRight: 6}}>
+                  <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.42l-2.34-2.34a1 1 0 00-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/>
+                </svg>
+                Open in Compose
+              </button>
+            )}
           </div>
         ))}
         {loading && (

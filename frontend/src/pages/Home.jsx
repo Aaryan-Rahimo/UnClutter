@@ -6,6 +6,7 @@ import EmailList from '../components/layout/EmailList'
 import GroupedEmailList from '../components/layout/GroupedEmailList'
 import SortControls from '../components/layout/SortControls'
 import EmailDetail from '../components/email/EmailDetail'
+import ComposeModal from '../components/email/ComposeModal'
 import ChatbotSidebar from '../components/layout/ChatbotSidebar'
 import Toast from '../components/layout/Toast'
 import GroupEditModal from '../components/layout/GroupEditModal'
@@ -17,6 +18,14 @@ import {
   fetchEmail,
   mapEmailFromBackend,
   categorizeEmail,
+  sendNewEmail,
+  replyToEmail,
+  deleteEmail,
+  archiveEmail,
+  starEmail,
+  fetchFolder,
+  fetchDrafts,
+  fetchLabelCounts,
 } from '../utils/gmailApi'
 import { fetchGroups, updateGroup, deleteGroup } from '../utils/groupsApi'
 import '../styles/home.css'
@@ -93,8 +102,13 @@ function Home() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [lastSynced, setLastSynced] = useState(null)
 
+  const [activeFolder, setActiveFolder] = useState('inbox')
+  const [folderEmails, setFolderEmails] = useState([]) // emails for non-inbox folders
+  const [folderLoading, setFolderLoading] = useState(false)
+  const [labelCounts, setLabelCounts] = useState({})
+
   const [user, setUser] = useState(null)
-  const [emails, setEmails] = useState([])
+  const [emails, setEmails] = useState([]) // inbox emails (locally cached)
   const [userGroups, setUserGroups] = useState([])
   const [loading, setLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -107,6 +121,10 @@ function Home() {
   // Group edit modal
   const [editingGroup, setEditingGroup] = useState(null)
   const [deletingGroup, setDeletingGroup] = useState(null)
+
+  // Compose email modal
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [composeInitial, setComposeInitial] = useState({}) // { to, subject, body }
 
   // Resizable panels
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -309,8 +327,58 @@ function Home() {
     return () => { cancelled = true; clearTimeout(timeoutId) }
   }, [sessionId, refreshTrigger])
 
+  // Fetch label counts for sidebar badges
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    fetchLabelCounts()
+      .then((res) => { if (!cancelled) setLabelCounts(res.counts || {}) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [sessionId, refreshTrigger])
+
+  // Fetch emails when switching to a non-inbox folder
+  const handleFolderChange = useCallback(async (folderId) => {
+    setActiveFolder(folderId)
+    setSelectedEmailId(null)
+    setSelectedEmail(null)
+
+    if (folderId === 'inbox') {
+      setFolderEmails([])
+      return
+    }
+
+    setFolderLoading(true)
+    try {
+      let res
+      if (folderId === 'drafts') {
+        res = await fetchDrafts()
+      } else {
+        // Map folder id to Gmail label (backend also supports ARCHIVE)
+        const labelMap = { sent: 'SENT', starred: 'STARRED', trash: 'TRASH', spam: 'SPAM', archive: 'ARCHIVE' }
+        const label = labelMap[folderId]
+        if (!label) { setFolderLoading(false); return }
+        res = await fetchFolder(label)
+      }
+      const list = (res?.emails ?? []).map((e) => ({
+        ...e,
+        id: e.id || e.gmail_id, // folder emails use gmail_id as id
+        subject: e.subject || '(No Subject)',
+        sender: e.from_address || 'Unknown',
+        date: formatDate(e.received_at || '') || '',
+      }))
+      setFolderEmails(list)
+    } catch (err) {
+      console.error('Folder fetch error:', err)
+      setFolderEmails([])
+    } finally {
+      setFolderLoading(false)
+    }
+  }, [])
+
   const handleEmailClick = useCallback(async (emailOrId) => {
-    const emailId = typeof emailOrId === 'object' ? emailOrId?.id : emailOrId
+    const emailObj = typeof emailOrId === 'object' ? emailOrId : null
+    const emailId = emailObj?.id || emailOrId
     if (!emailId) return
     setSelectedEmailId(emailId)
     setDetailLoading(true)
@@ -327,8 +395,19 @@ function Home() {
       }
       setSelectedEmail(displayEmail)
     } catch (err) {
-      console.error('Error fetching email:', err)
-      setSelectedEmail(null)
+      // For non-inbox folder emails not in local DB, show the list-level data we have
+      if (emailObj) {
+        setSelectedEmail({
+          ...emailObj,
+          sender: emailObj.from_address || emailObj.sender || 'Unknown',
+          date: emailObj.date || formatDate(emailObj.received_at) || '',
+          body: emailObj.snippet || '(Email body not available — this email is not in your inbox cache)',
+          labels: emailObj.label_ids || [],
+        })
+      } else {
+        console.error('Error fetching email:', err)
+        setSelectedEmail(null)
+      }
     } finally {
       setDetailLoading(false)
     }
@@ -393,6 +472,82 @@ function Home() {
       addToast({ type: 'error', message: 'Failed to delete group' })
     }
   }, [deletingGroup, addToast])
+
+  // ---------- Email actions ----------
+
+  const handleSendEmail = useCallback(async ({ to, cc, bcc, subject, body }) => {
+    await sendNewEmail({ to, cc, bcc, subject, body })
+    addToast({ type: 'success', message: `Email sent to ${to}` })
+    setComposeOpen(false)
+    setComposeInitial({})
+  }, [addToast])
+
+  const handleReplyEmail = useCallback(async (emailId, { body, cc, bcc }) => {
+    await replyToEmail(emailId, { body, cc, bcc })
+    addToast({ type: 'success', message: 'Reply sent' })
+  }, [addToast])
+
+  const handleDeleteEmail = useCallback(async (emailId) => {
+    try {
+      await deleteEmail(emailId)
+      setEmails((prev) => prev.filter((e) => e.id !== emailId))
+      if (selectedEmailId === emailId) {
+        setSelectedEmailId(null)
+        setSelectedEmail(null)
+      }
+      addToast({ type: 'success', message: 'Email deleted' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to delete' })
+    }
+  }, [selectedEmailId, addToast])
+
+  const handleArchiveEmail = useCallback(async (emailId) => {
+    try {
+      await archiveEmail(emailId)
+      setEmails((prev) => prev.filter((e) => e.id !== emailId))
+      if (selectedEmailId === emailId) {
+        setSelectedEmailId(null)
+        setSelectedEmail(null)
+      }
+      addToast({ type: 'success', message: 'Email archived' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to archive' })
+    }
+  }, [selectedEmailId, addToast])
+
+  const handleStarEmail = useCallback(async (emailId) => {
+    try {
+      const result = await starEmail(emailId)
+      setEmails((prev) => prev.map((e) => e.id === emailId ? { ...e, is_starred: result.is_starred } : e))
+      if (selectedEmail?.id === emailId) {
+        setSelectedEmail((prev) => prev ? { ...prev, is_starred: result.is_starred } : prev)
+      }
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to star' })
+    }
+  }, [selectedEmail, addToast])
+
+  const handleComposeFromChat = useCallback(({ to, subject, body }) => {
+    setComposeInitial({ to, subject, body })
+    setComposeOpen(true)
+  }, [])
+
+  // View mode change: when not in Inbox, switching to Tabs/Grouped also switches folder to Inbox
+  const handleViewModeChange = useCallback((mode) => {
+    setViewMode(mode)
+    if (activeFolder !== 'inbox') {
+      setActiveFolder('inbox')
+      setFolderEmails([])
+    }
+  }, [activeFolder])
+
+  // Clicking a group: go to Inbox, Tabs view, and select that group's tab
+  const handleGroupClick = useCallback((group) => {
+    setActiveFolder('inbox')
+    setFolderEmails([])
+    setViewMode('tabs')
+    setActiveTab(group.id)
+  }, [])
 
   // ---------- Filtered / sorted emails ----------
 
@@ -529,7 +684,7 @@ function Home() {
     : null
 
   // Build CSS class for dashboard
-  const isGroupedView = viewMode === 'grouped'
+  const isGroupedView = viewMode === 'grouped' && activeFolder === 'inbox'
   const dashClasses = [
     'dashboard dashboard--gmail',
     chatOpen ? 'dashboard--chat-open' : '',
@@ -583,28 +738,44 @@ function Home() {
             emailCount={sortedEmails.length}
             totalCount={emails.length}
             viewMode={viewMode}
-            onViewModeChange={setViewMode}
+            onViewModeChange={handleViewModeChange}
             userGroups={userGroups}
             onDeleteGroup={handleDeleteGroup}
             onEditGroup={handleEditGroup}
+            onGroupClick={handleGroupClick}
+            activeFolder={activeFolder}
+            onFolderChange={handleFolderChange}
+            labelCounts={labelCounts}
           />
         </div>
         <div className="dashboard__list-area">
-          <SortControls
-            sortRange={sortRange}
-            onSortRangeChange={setSortRange}
-            emailCount={sortedEmails.length}
-            totalCount={emails.length}
-          />
-          {viewMode === 'tabs' && (
+          {activeFolder === 'inbox' && (
+            <SortControls
+              sortRange={sortRange}
+              onSortRangeChange={setSortRange}
+              emailCount={sortedEmails.length}
+              totalCount={emails.length}
+            />
+          )}
+          {activeFolder === 'inbox' && viewMode === 'tabs' && (
             <CategoryTabs
               tabs={categoryTabsWithCounts}
               activeTab={activeTab}
               onTabChange={setActiveTab}
             />
           )}
+          {activeFolder !== 'inbox' && (
+            <div className="folder-header">
+              <h2 className="folder-header__title">
+                {activeFolder.charAt(0).toUpperCase() + activeFolder.slice(1)}
+              </h2>
+              <span className="folder-header__count">
+                {folderEmails.length} email{folderEmails.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+          )}
           <div className="dashboard__list-scroll">
-            {loading ? (
+            {(activeFolder === 'inbox' ? loading : folderLoading) ? (
               <div className="loading-state">
                 <div className="skeleton-card" />
                 <div className="skeleton-card" />
@@ -612,6 +783,22 @@ function Home() {
                 <div className="skeleton-card" />
                 <div className="skeleton-card" />
               </div>
+            ) : activeFolder !== 'inbox' ? (
+              /* Non-inbox folder: show folder emails */
+              folderEmails.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state__icon">&#128233;</div>
+                  <p className="empty-state__title">No emails in {activeFolder}</p>
+                  <p className="empty-state__hint">This folder is empty</p>
+                </div>
+              ) : (
+                <EmailList
+                  emails={folderEmails}
+                  selectedEmailId={selectedEmailId}
+                  onSelectEmail={handleEmailClick}
+                  showKeywordChips={false}
+                />
+              )
             ) : displayedEmails.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-state__icon">&#128233;</div>
@@ -668,6 +855,10 @@ function Home() {
                 setSelectedEmailId(null)
                 setSelectedEmail(null)
               }}
+              onDelete={handleDeleteEmail}
+              onArchive={handleArchiveEmail}
+              onStar={handleStarEmail}
+              onReply={handleReplyEmail}
             />
           ) : !isGroupedView ? (
             <div className="email-detail-empty">
@@ -686,6 +877,7 @@ function Home() {
             onGroupsChange={() => fetchGroups().then(setUserGroups)}
             onToast={addToast}
             onSelectEmail={handleEmailClick}
+            onCompose={handleComposeFromChat}
           />
         </div>
 
@@ -728,6 +920,29 @@ function Home() {
           />
         )}
       </div>
+
+      {/* Compose email FAB */}
+      <button
+        type="button"
+        className="compose-fab"
+        onClick={() => { setComposeInitial({}); setComposeOpen(true) }}
+        title="Compose new email"
+        aria-label="Compose new email"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 000-1.42l-2.34-2.34a1.003 1.003 0 00-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>
+        <span className="compose-fab__text">Compose</span>
+      </button>
+
+      {/* Compose email modal */}
+      {composeOpen && (
+        <ComposeModal
+          onSend={handleSendEmail}
+          onClose={() => { setComposeOpen(false); setComposeInitial({}) }}
+          initialTo={composeInitial.to}
+          initialSubject={composeInitial.subject}
+          initialBody={composeInitial.body}
+        />
+      )}
 
       {/* Toast notifications */}
       <Toast toasts={toasts} onDismiss={dismissToast} />

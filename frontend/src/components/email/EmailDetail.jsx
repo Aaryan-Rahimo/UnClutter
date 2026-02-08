@@ -5,12 +5,6 @@ import { getDisplayBody, splitIntoParagraphs } from '../../utils/emailDisplay'
 const TRUNCATE_LIMIT = 3000
 const TRUNCATE_SHOW = 1500
 
-/**
- * Wrap raw HTML email body in a minimal document so it renders cleanly inside a
- * sandboxed iframe.  We inject a small <style> reset so fonts and spacing look
- * reasonable, and we add a script that posts its scrollHeight back to the parent
- * so we can auto-size the iframe.
- */
 function buildIframeSrcdoc(html) {
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -31,7 +25,6 @@ function buildIframeSrcdoc(html) {
   postHeight();
   new MutationObserver(postHeight).observe(document.body,{childList:true,subtree:true,attributes:true});
   window.addEventListener('load',postHeight);
-  // images may load async
   document.querySelectorAll('img').forEach(function(img){img.addEventListener('load',postHeight);img.addEventListener('error',postHeight);});
   setTimeout(postHeight,500);
   setTimeout(postHeight,2000);
@@ -39,14 +32,19 @@ function buildIframeSrcdoc(html) {
 </script></body></html>`
 }
 
-function EmailDetail({ email, onBack }) {
+function EmailDetail({ email, onBack, onDelete, onArchive, onStar, onReply, onToggleRead }) {
   const [summary, setSummary] = useState(null)
   const [summaryError, setSummaryError] = useState(null)
   const [summarizing, setSummarizing] = useState(false)
   const [showFullBody, setShowFullBody] = useState(false)
-  const [viewHtml, setViewHtml] = useState(true) // default to HTML when available
+  const [viewHtml, setViewHtml] = useState(true)
   const [iframeHeight, setIframeHeight] = useState(400)
+  const [showReply, setShowReply] = useState(false)
+  const [replyText, setReplyText] = useState('')
+  const [replySending, setReplySending] = useState(false)
+  const [replyError, setReplyError] = useState(null)
   const iframeRef = useRef(null)
+  const replyRef = useRef(null)
 
   useEffect(() => {
     if (email) {
@@ -55,10 +53,12 @@ function EmailDetail({ email, onBack }) {
       setShowFullBody(false)
       setViewHtml(true)
       setIframeHeight(400)
+      setShowReply(false)
+      setReplyText('')
+      setReplyError(null)
     }
   }, [email?.id])
 
-  // Listen for iframe height messages
   useEffect(() => {
     function handleMessage(e) {
       if (e.data?.type === 'iframe-height' && typeof e.data.height === 'number') {
@@ -68,6 +68,10 @@ function EmailDetail({ email, onBack }) {
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
   }, [])
+
+  useEffect(() => {
+    if (showReply && replyRef.current) replyRef.current.focus()
+  }, [showReply])
 
   const handleSummarize = async () => {
     if (!email) return
@@ -89,6 +93,21 @@ function EmailDetail({ email, onBack }) {
       setSummaryError(err.message || 'Summarization failed.')
     } finally {
       setSummarizing(false)
+    }
+  }
+
+  const handleReply = async () => {
+    if (!replyText.trim() || !onReply) return
+    setReplyError(null)
+    setReplySending(true)
+    try {
+      await onReply(email.id, { body: replyText.trim() })
+      setReplyText('')
+      setShowReply(false)
+    } catch (err) {
+      setReplyError(err.message || 'Failed to send reply')
+    } finally {
+      setReplySending(false)
     }
   }
 
@@ -118,7 +137,6 @@ function EmailDetail({ email, onBack }) {
         .filter(Boolean)
     : []
 
-  // Format sender name from "Name <email>" format
   const senderDisplay = (() => {
     const s = email.sender || email.from_address || ''
     const match = s.match(/^(.+?)\s*<(.+)>$/)
@@ -138,19 +156,51 @@ function EmailDetail({ email, onBack }) {
           Back
         </button>
         <span className="email-detail__toolbar-divider" />
-        <button type="button" className="email-detail__action">Reply</button>
-        <button type="button" className="email-detail__action">Forward</button>
+
+        {/* Action buttons */}
+        <button
+          type="button"
+          className="email-detail__action"
+          onClick={() => setShowReply(true)}
+          title="Reply"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
+          Reply
+        </button>
+        <button
+          type="button"
+          className="email-detail__action"
+          onClick={() => onArchive?.(email.id)}
+          title="Archive"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z"/></svg>
+          Archive
+        </button>
+        <button
+          type="button"
+          className="email-detail__action email-detail__action--danger"
+          onClick={() => onDelete?.(email.id)}
+          title="Delete"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          Delete
+        </button>
+        <button
+          type="button"
+          className={`email-detail__action ${email.is_starred ? 'email-detail__action--starred' : ''}`}
+          onClick={() => onStar?.(email.id)}
+          title={email.is_starred ? 'Unstar' : 'Star'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            {email.is_starred
+              ? <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
+              : <path d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z"/>
+            }
+          </svg>
+          {email.is_starred ? 'Starred' : 'Star'}
+        </button>
+
         <div style={{flex: 1}} />
-        {hasHtml && (
-          <button
-            type="button"
-            className={`email-detail__btn email-detail__btn--toggle ${showHtmlView ? 'active' : ''}`}
-            onClick={() => setViewHtml((v) => !v)}
-            title={showHtmlView ? 'Switch to plain text' : 'Switch to formatted view'}
-          >
-            {showHtmlView ? 'Plain text' : 'Formatted'}
-          </button>
-        )}
         <button
           type="button"
           className="email-detail__btn email-detail__btn--outline"
@@ -193,7 +243,7 @@ function EmailDetail({ email, onBack }) {
         </div>
       )}
 
-      {/* Email body: HTML iframe or plain text */}
+      {/* Email body */}
       <div className="email-detail__body">
         {showHtmlView ? (
           <iframe
@@ -207,7 +257,6 @@ function EmailDetail({ email, onBack }) {
         ) : (
           <>
             {paragraphs.map((para, i) => {
-              // Detect bullet lists
               if (para.includes('\n\u2022 ') || para.startsWith('\u2022 ')) {
                 const items = para.split('\n').filter(Boolean)
                 return (
@@ -218,7 +267,6 @@ function EmailDetail({ email, onBack }) {
                   </ul>
                 )
               }
-              // Detect blockquotes
               if (para.startsWith('> ')) {
                 return (
                   <blockquote key={i} className="email-detail__body-quote">
@@ -226,7 +274,6 @@ function EmailDetail({ email, onBack }) {
                   </blockquote>
                 )
               }
-              // Regular paragraph
               return <p key={i} className="email-detail__body-para">{para}</p>
             })}
             {isTruncated && (
@@ -242,21 +289,78 @@ function EmailDetail({ email, onBack }) {
         )}
       </div>
 
+      {/* AI Summary */}
       {(summary || summarizing || summaryError) && (
         <div className="email-detail__summary-box">
           <h3 className="email-detail__summary-title">AI Summary</h3>
           {summarizing && <p className="email-detail__summary-loading">Summarizing...</p>}
-          {summaryError && (
-            <p className="email-detail__summary-error">{summaryError}</p>
-          )}
+          {summaryError && <p className="email-detail__summary-error">{summaryError}</p>}
           {!summarizing && !summaryError && summaryLines.length > 0 && (
             <ul className="email-detail__summary-list">
-              {summaryLines.map((item, i) => (
-                <li key={i}>{item}</li>
-              ))}
+              {summaryLines.map((item, i) => <li key={i}>{item}</li>)}
             </ul>
           )}
         </div>
+      )}
+
+      {/* Reply section */}
+      {showReply && (
+        <div className="email-detail__reply">
+          <div className="email-detail__reply-header">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style={{marginRight: 6, flexShrink: 0, color: '#5f6368'}}>
+              <path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/>
+            </svg>
+            <span>Replying to <strong>{senderDisplay.name}</strong></span>
+            <button
+              type="button"
+              className="email-detail__reply-close"
+              onClick={() => { setShowReply(false); setReplyText(''); setReplyError(null) }}
+              aria-label="Cancel reply"
+            >&times;</button>
+          </div>
+          <textarea
+            ref={replyRef}
+            className="email-detail__reply-body"
+            value={replyText}
+            onChange={(e) => setReplyText(e.target.value)}
+            placeholder="Write your reply..."
+            rows={6}
+            disabled={replySending}
+          />
+          {replyError && <p className="email-detail__reply-error">{replyError}</p>}
+          <div className="email-detail__reply-actions">
+            <button
+              type="button"
+              className="email-detail__reply-send"
+              onClick={handleReply}
+              disabled={replySending || !replyText.trim()}
+            >
+              {replySending ? 'Sending...' : 'Send Reply'}
+            </button>
+            <button
+              type="button"
+              className="email-detail__reply-cancel"
+              onClick={() => { setShowReply(false); setReplyText(''); setReplyError(null) }}
+              disabled={replySending}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Quick reply bar at bottom (when reply panel is not open) */}
+      {!showReply && (
+        <button
+          type="button"
+          className="email-detail__quick-reply"
+          onClick={() => setShowReply(true)}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style={{marginRight: 8, color: '#5f6368'}}>
+            <path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/>
+          </svg>
+          Click here to reply...
+        </button>
       )}
     </div>
   )

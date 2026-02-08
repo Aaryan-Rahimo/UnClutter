@@ -1,7 +1,18 @@
 import { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../config.js';
-import { fetchLatestEmails } from '../lib/gmail.js';
+import {
+  fetchLatestEmails,
+  fetchEmailsByLabel,
+  fetchEmailsByQuery,
+  fetchDrafts,
+  fetchLabelCounts,
+  sendEmail,
+  trashEmail,
+  archiveEmail,
+  toggleStarEmail,
+  toggleReadEmail,
+} from '../lib/gmail.js';
 import { getAccountBySession } from '../lib/session.js';
 
 export const gmailRouter = Router();
@@ -153,7 +164,7 @@ gmailRouter.get('/email/:id', async (req, res) => {
   const { id } = req.params;
   const { data, error } = await supabase
     .from('emails')
-    .select('id, subject, from_address, to_addresses, cc_addresses, received_at, body_plain, body_html, snippet, ai_summary, ai_category')
+    .select('id, gmail_id, thread_id, subject, from_address, to_addresses, cc_addresses, received_at, body_plain, body_html, snippet, ai_summary, ai_category, is_starred, is_read')
     .eq('id', id)
     .eq('account_id', account.accountId)
     .single();
@@ -162,4 +173,206 @@ gmailRouter.get('/email/:id', async (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
   res.json(data);
+});
+
+/* ── Fetch emails by Gmail label or special folder (archive) ── */
+const VALID_LABELS = ['SENT', 'TRASH', 'SPAM', 'STARRED', 'IMPORTANT', 'UNREAD'];
+
+gmailRouter.get('/folder/:label', async (req, res) => {
+  const { account } = req;
+  const rawLabel = req.params.label;
+  const label = rawLabel.toUpperCase();
+
+  try {
+    let emails;
+    if (label === 'ARCHIVE') {
+      // Archived = not in inbox (exclude trash/spam so it's "clean" archive)
+      emails = await fetchEmailsByQuery(account.access_token, '-in:inbox', 30);
+    } else if (VALID_LABELS.includes(label)) {
+      emails = await fetchEmailsByLabel(account.access_token, label, 30);
+    } else {
+      return res.status(400).json({ error: `Invalid label: ${rawLabel}. Valid: ARCHIVE, ${VALID_LABELS.join(', ')}` });
+    }
+    res.json({ emails, label: label });
+  } catch (err) {
+    console.error('[gmail] Folder fetch error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch folder' });
+  }
+});
+
+/* ── Fetch drafts ── */
+gmailRouter.get('/drafts', async (req, res) => {
+  const { account } = req;
+  try {
+    const drafts = await fetchDrafts(account.access_token, 20);
+    res.json({ emails: drafts });
+  } catch (err) {
+    console.error('[gmail] Drafts fetch error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch drafts' });
+  }
+});
+
+/* ── Fetch label counts (for sidebar badges) ── */
+gmailRouter.get('/label-counts', async (req, res) => {
+  const { account } = req;
+  try {
+    const counts = await fetchLabelCounts(account.access_token);
+    res.json({ counts });
+  } catch (err) {
+    console.error('[gmail] Label counts error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch label counts' });
+  }
+});
+
+/* ── Send new email ── */
+gmailRouter.post('/send', async (req, res) => {
+  const { account } = req;
+  const { to, cc, bcc, subject, body } = req.body;
+  if (!to || !subject || !body) {
+    return res.status(400).json({ error: 'to, subject, and body are required' });
+  }
+  try {
+    const result = await sendEmail(account.access_token, { to, cc, bcc, subject, body });
+    res.json({ success: true, messageId: result.id, threadId: result.threadId });
+  } catch (err) {
+    console.error('[gmail] Send error:', err.message);
+    res.status(500).json({ error: 'Failed to send email' });
+  }
+});
+
+/* ── Reply to email ── */
+gmailRouter.post('/reply/:id', async (req, res) => {
+  const { account } = req;
+  const { id } = req.params;
+  const { body: replyBody, cc, bcc } = req.body;
+  if (!replyBody) return res.status(400).json({ error: 'body is required' });
+
+  // Fetch original email from DB
+  const { data: original, error: dbErr } = await supabase
+    .from('emails')
+    .select('gmail_id, thread_id, subject, from_address')
+    .eq('id', id)
+    .eq('account_id', account.accountId)
+    .single();
+
+  if (dbErr || !original) return res.status(404).json({ error: 'Email not found' });
+
+  try {
+    const subject = original.subject?.startsWith('Re:') ? original.subject : `Re: ${original.subject}`;
+    const inReplyTo = `<${original.gmail_id}@mail.gmail.com>`;
+    const result = await sendEmail(account.access_token, {
+      to: original.from_address,
+      cc: cc || undefined,
+      bcc: bcc || undefined,
+      subject,
+      body: replyBody,
+      threadId: original.thread_id,
+      inReplyTo,
+      references: inReplyTo,
+    });
+    res.json({ success: true, messageId: result.id, threadId: result.threadId });
+  } catch (err) {
+    console.error('[gmail] Reply error:', err.message);
+    res.status(500).json({ error: 'Failed to send reply' });
+  }
+});
+
+/* ── Delete (trash) email ── */
+gmailRouter.delete('/email/:id', async (req, res) => {
+  const { account } = req;
+  const { id } = req.params;
+
+  const { data: email, error: dbErr } = await supabase
+    .from('emails')
+    .select('gmail_id')
+    .eq('id', id)
+    .eq('account_id', account.accountId)
+    .single();
+
+  if (dbErr || !email) return res.status(404).json({ error: 'Email not found' });
+
+  try {
+    await trashEmail(account.access_token, email.gmail_id);
+    // Remove from local DB
+    await supabase.from('emails').delete().eq('id', id).eq('account_id', account.accountId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[gmail] Trash error:', err.message);
+    res.status(500).json({ error: 'Failed to delete email' });
+  }
+});
+
+/* ── Archive email ── */
+gmailRouter.post('/email/:id/archive', async (req, res) => {
+  const { account } = req;
+  const { id } = req.params;
+
+  const { data: email, error: dbErr } = await supabase
+    .from('emails')
+    .select('gmail_id, label_ids')
+    .eq('id', id)
+    .eq('account_id', account.accountId)
+    .single();
+
+  if (dbErr || !email) return res.status(404).json({ error: 'Email not found' });
+
+  try {
+    await archiveEmail(account.access_token, email.gmail_id);
+    const newLabels = (email.label_ids || []).filter((l) => l !== 'INBOX');
+    await supabase.from('emails').update({ label_ids: newLabels, updated_at: new Date().toISOString() }).eq('id', id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[gmail] Archive error:', err.message);
+    res.status(500).json({ error: 'Failed to archive email' });
+  }
+});
+
+/* ── Toggle star ── */
+gmailRouter.post('/email/:id/star', async (req, res) => {
+  const { account } = req;
+  const { id } = req.params;
+
+  const { data: email, error: dbErr } = await supabase
+    .from('emails')
+    .select('gmail_id, is_starred')
+    .eq('id', id)
+    .eq('account_id', account.accountId)
+    .single();
+
+  if (dbErr || !email) return res.status(404).json({ error: 'Email not found' });
+
+  try {
+    const newStarred = !email.is_starred;
+    await toggleStarEmail(account.access_token, email.gmail_id, newStarred);
+    await supabase.from('emails').update({ is_starred: newStarred, updated_at: new Date().toISOString() }).eq('id', id);
+    res.json({ success: true, is_starred: newStarred });
+  } catch (err) {
+    console.error('[gmail] Star error:', err.message);
+    res.status(500).json({ error: 'Failed to toggle star' });
+  }
+});
+
+/* ── Toggle read/unread ── */
+gmailRouter.post('/email/:id/read', async (req, res) => {
+  const { account } = req;
+  const { id } = req.params;
+
+  const { data: email, error: dbErr } = await supabase
+    .from('emails')
+    .select('gmail_id, is_read')
+    .eq('id', id)
+    .eq('account_id', account.accountId)
+    .single();
+
+  if (dbErr || !email) return res.status(404).json({ error: 'Email not found' });
+
+  try {
+    const newRead = !email.is_read;
+    await toggleReadEmail(account.access_token, email.gmail_id, newRead);
+    await supabase.from('emails').update({ is_read: newRead, updated_at: new Date().toISOString() }).eq('id', id);
+    res.json({ success: true, is_read: newRead });
+  } catch (err) {
+    console.error('[gmail] Read toggle error:', err.message);
+    res.status(500).json({ error: 'Failed to toggle read status' });
+  }
 });
