@@ -84,6 +84,10 @@
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  margin: 0 auto;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+  margin-left: 8px;
   padding: 0.75rem 1rem;
   border: 1px solid var(--color-border);
   border-radius: 10px;
@@ -163,7 +167,7 @@
   color: var(--color-text-inverted);
   font-weight: 600;
   cursor: pointer;
-  margin-top: 0.25rem;
+  margin: 0.25rem auto 0;
 }
 
 .login-primary-btn:hover {
