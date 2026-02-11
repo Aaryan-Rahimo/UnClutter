@@ -2,6 +2,8 @@
 
 Your inbox, simplified. Login with Google, sync Gmail, sort emails, and chat with AI (Gemini).
 
+View Demo: https://devpost.com/software/unclutter-ljtwq4?ref_content=my-projects-tab&ref_feature=my_projects
+
 UnClutter connects to your Gmail, syncs recent messages into a clean dashboard, and groups them by intent (promotions, updates, social, etc.). You can search, filter by date, and read email details in a focused layout. The built-in assistant can summarize emails, surface deadlines/action items, and create custom group rules to keep your inbox organized.
 
 ## Tech Stack
